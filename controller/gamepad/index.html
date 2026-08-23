@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>LEGO 4WD car - gamepad</title>
+<style>
+  body{font-family:sans-serif;background:#111;color:#eee;margin:0;padding:20px;
+       display:flex;flex-direction:column;align-items:center;gap:18px;user-select:none}
+  h1{font-size:1.4rem;margin:0}
+  .card{background:#1c1c1c;border-radius:12px;padding:14px 18px;width:min(420px,100%);
+        box-sizing:border-box}
+  .row{display:flex;justify-content:space-between;gap:12px;font-size:.9rem;padding:3px 0}
+  .row span:last-child{color:#9be;text-align:right}
+  .ok{color:#4c9!important} .bad{color:#e66!important}
+  input{background:#000;color:#eee;border:1px solid #444;border-radius:6px;padding:6px 8px;
+        font-size:.9rem;width:150px;text-align:right}
+  /* One bar per side: centre = standstill, right = forward, left = backward */
+  .bar{position:relative;height:14px;background:#242424;border-radius:7px;margin:2px 0 10px}
+  .bar::before{content:'';position:absolute;left:50%;top:0;bottom:0;width:1px;background:#444}
+  .bar i{position:absolute;top:0;bottom:0;left:50%;width:0;background:#28a05a;border-radius:7px}
+  /* Stick dot, so the kids can see what their thumb is doing */
+  #stick{width:110px;height:110px;border-radius:50%;background:#242424;position:relative}
+  #stick i{position:absolute;width:18px;height:18px;border-radius:50%;background:#9be;
+           left:46px;top:46px;transition:none}
+  p.hint{color:#888;font-size:.8rem;max-width:420px;text-align:center;line-height:1.5}
+</style>
+</head>
+<body>
+
+<h1>&#127918; LEGO 4WD car - gamepad</h1>
+
+<div class="card">
+  <div class="row"><span>Car address</span><input id="ip" value="car.lan"></div>
+  <div class="row"><span>Secure context</span><span id="ctx">?</span></div>
+  <div class="row"><span>Controller</span><span id="gp">- none yet -</span></div>
+</div>
+
+<div class="card">
+  <div class="row"><span>left</span><span id="lVal">0 %</span></div>
+  <div class="bar"><i id="lBar"></i></div>
+  <div class="row"><span>right</span><span id="rVal">0 %</span></div>
+  <div class="bar"><i id="rBar"></i></div>
+</div>
+
+<div id="stick"><i></i></div>
+
+<p class="hint">
+  Plug the controller in and <b>press any button once</b> - browsers only
+  report a gamepad after that. Left stick: up/down = throttle, left/right =
+  steering. Both at once for curves. Let go to stop.
+</p>
+
+<script>
+// --- Settings ---
+const DEADZONE  = 0.15;   // stick slop around the centre that we ignore
+const SEND_MS   = 150;    // minimum gap between two commands
+
+// WHY SO SLOW? Measured: the Arduino needs 60-270 ms just to ACCEPT a new
+// TCP connection (answering then only takes ~60 ms), and every fetch() is a
+// new connection. Send faster than it can accept and the commands pile up:
+// the car keeps rolling for seconds after you let go, and drives in jerks.
+// So on top of the minimum gap there is the rule below: only ever ONE
+// command in flight at a time.
+
+const el = id => document.getElementById(id);
+
+// Remember the car address so you do not have to type it every time
+const saved = localStorage.getItem('carAddress');
+if (saved) el('ip').value = saved;
+el('ip').addEventListener('change', () => localStorage.setItem('carAddress', el('ip').value.trim()));
+
+// Without a secure context the browser will not hand out the Gamepad API
+el('ctx').textContent = isSecureContext ? 'yes' : 'NO - open this page locally!';
+el('ctx').className   = isSecureContext ? 'ok' : 'bad';
+
+// --- Send a command to the car ---
+// no-cors: we only want to send, the answer does not interest us.
+let inFlight = 0;   // how many commands are still waiting for a reply
+
+function send(path) {
+  inFlight++;
+  fetch('http://' + el('ip').value.trim() + path, {mode: 'no-cors'})
+    .catch(() => {})
+    .finally(() => { inFlight--; });
+}
+
+let lastL = 0, lastR = 0, lastSend = 0;
+
+function setDrive(l, r, now) {
+  const changed = (l !== lastL || r !== lastR);
+  const driving = (l !== 0 || r !== 0);
+  const halting = changed && !driving;   // stick was released
+
+  // Stopping wins: send it immediately, without waiting for the interval or
+  // for a reply. Everything else only goes out when nothing is in flight -
+  // that way the rate adapts by itself to whatever the Arduino can handle
+  // and nothing piles up.
+  if (halting || ((changed || driving) && inFlight === 0 && now - lastSend > SEND_MS)) {
+    send('/drive?l=' + l + '&r=' + r);
+    lastSend = now;
+    lastL = l; lastR = r;
+  }
+
+  el('lVal').textContent = l + ' %';
+  el('rVal').textContent = r + ' %';
+  bar('lBar', l);
+  bar('rBar', r);
+}
+
+// The bar grows out of the centre: right = forward, left = backward
+function bar(id, value) {
+  const b = el(id);
+  const half = Math.abs(value) / 2;           // 100 % = half the bar width
+  b.style.width = half + '%';
+  b.style.left  = (value >= 0 ? 50 : 50 - half) + '%';
+  b.style.background = value >= 0 ? '#28a05a' : '#a33';
+}
+
+// Cut away the stick slop, then stretch the rest back out to 0..1
+function shapeAxis(v) {
+  const mag = Math.abs(v);
+  if (mag < DEADZONE) return 0;
+  const stretched = (mag - DEADZONE) / (1 - DEADZONE);
+  // Squaring: finer control around the centre, still full throttle at the edge
+  return Math.sign(v) * stretched * stretched;
+}
+
+// --- Mix the stick into two side speeds ---
+function readPad(pad) {
+  let x = shapeAxis(pad.axes[0] || 0);      // steering
+  let y = shapeAxis(-(pad.axes[1] || 0));   // stick up = forward
+
+  // The D-pad counts as a fully deflected stick
+  const p = i => pad.buttons[i] && pad.buttons[i].pressed;
+  if (p(12)) y =  1;
+  if (p(13)) y = -1;
+  if (p(14)) x = -1;
+  if (p(15)) x =  1;
+
+  el('stick').firstElementChild.style.transform =
+    'translate(' + (x * 44) + 'px, ' + (-y * 44) + 'px)';
+
+  // Tank mixing: throttle goes to both sides, steering is added on the left
+  // and subtracted on the right.
+  let l = y + x;
+  let r = y - x;
+
+  // Scale down if the sum goes past 1 - otherwise "forward AND steer" would
+  // clip one side and the car would pull off to one side.
+  const biggest = Math.max(1, Math.abs(l), Math.abs(r));
+  l /= biggest;
+  r /= biggest;
+
+  return [Math.round(l * 100), Math.round(r * 100)];
+}
+
+// --- Main loop ---
+function loop(now) {
+  const pad = [...navigator.getGamepads()].find(p => p);
+  if (pad) {
+    el('gp').textContent = pad.id.slice(0, 40);
+    el('gp').className = 'ok';
+    const v = readPad(pad);
+    setDrive(v[0], v[1], now);
+  } else {
+    el('gp').textContent = '- none yet -';
+    el('gp').className = '';
+    setDrive(0, 0, now);
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// Safety net: tab loses focus or window closes -> stop
+addEventListener('blur',     () => send('/stop'));
+addEventListener('pagehide', () => send('/stop'));
+</script>
+</body>
+</html>

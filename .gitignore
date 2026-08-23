@@ -1,0 +1,18 @@
+# Arduino / arduino-cli build artefacts
+firmware/**/build/
+*.hex
+*.bin
+*.elf
+*.map
+
+# WiFi credentials -- never commit these
+arduino_secrets.h
+
+# Operating system
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Editors
+.vscode/
+*.swp

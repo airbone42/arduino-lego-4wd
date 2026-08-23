@@ -1,0 +1,159 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 720" width="1120" height="720" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <rect x="0" y="0" width="1120" height="720" fill="#ffffff"/>
+
+  <style>
+    .box    { fill:#f7f8fa; stroke:#334; stroke-width:2; }
+    .name   { font-size:15px; font-weight:600; fill:#223; }
+    .pin    { font-size:12px; fill:#334; }
+    .note   { font-size:12px; fill:#667; }
+    .rail   { font-size:13px; font-weight:600; }
+    .w      { fill:none; stroke-width:2.5; stroke-linecap:round; stroke-linejoin:round; }
+    .wpos   { stroke:#d62828; }   /* battery + */
+    .wgnd   { stroke:#333333; }   /* ground   */
+    .w5v    { stroke:#e07b00; }   /* 5 V logic */
+    .wsig   { stroke:#1a6fd4; }   /* control signals */
+    .wmot   { stroke:#7b3fa0; }   /* motor outputs */
+    .dotpos { fill:#d62828; } .dotgnd { fill:#333333; }
+    .dot5v  { fill:#e07b00; } .dotmot { fill:#7b3fa0; }
+  </style>
+
+  <text x="30" y="34" font-size="20" font-weight="700" fill="#223">LEGO 4WD car &#8212; wiring</text>
+  <text x="30" y="56" class="note">One TB6612FNG, two motors in parallel per channel. STBY tied to 5 V, so the driver is always enabled.</text>
+
+  <!-- ============ power rails ============ -->
+  <line x1="200" y1="90"  x2="1060" y2="90"  class="w wpos"/>
+  <line x1="200" y1="640" x2="1060" y2="640" class="w wgnd"/>
+  <text x="1000" y="82"  class="rail" fill="#d62828" text-anchor="end">V+ rail (breadboard, ~9.6 V)</text>
+  <text x="1000" y="662" class="rail" fill="#333333" text-anchor="end">GND rail &#8212; everything shares this ground</text>
+
+  <!-- ============ battery ============ -->
+  <rect x="30" y="300" width="150" height="112" rx="6" class="box"/>
+  <text x="105" y="342" class="name" text-anchor="middle">8&#215; AA NiMH</text>
+  <text x="105" y="362" class="pin" text-anchor="middle">pack, ~9.6 V</text>
+  <text x="105" y="392" class="note" text-anchor="middle">(4&#215; AA alkaline = 6 V</text>
+  <text x="105" y="406" class="note" text-anchor="middle">also works, less punch)</text>
+  <text x="188" y="334" class="pin" fill="#d62828" font-weight="700">+</text>
+  <text x="188" y="392" class="pin" fill="#333333" font-weight="700">&#8722;</text>
+
+  <path d="M180,330 H200 V90"  class="w wpos"/>
+  <path d="M180,386 H245 V640" class="w wgnd"/>
+  <circle cx="200" cy="90"  r="4" class="dotpos"/>
+  <circle cx="245" cy="640" r="4" class="dotgnd"/>
+
+  <!-- ============ Arduino ============ -->
+  <rect x="260" y="190" width="230" height="300" rx="8" class="box"/>
+  <text x="375" y="228" class="name" text-anchor="middle">Arduino UNO R4 WiFi</text>
+  <text x="375" y="248" class="note" text-anchor="middle">brain &#8212; WiFi, web page,</text>
+  <text x="375" y="264" class="note" text-anchor="middle">12&#215;8 LED matrix</text>
+
+  <text x="300" y="206" class="pin" text-anchor="middle">VIN</text>
+  <text x="380" y="206" class="pin" text-anchor="middle">5V</text>
+  <text x="340" y="480" class="pin" text-anchor="middle">GND</text>
+
+  <text x="484" y="254" class="pin" text-anchor="end">D9  ~</text>
+  <text x="484" y="294" class="pin" text-anchor="end">D7</text>
+  <text x="484" y="334" class="pin" text-anchor="end">D8</text>
+  <text x="484" y="384" class="pin" text-anchor="end">D10 ~</text>
+  <text x="484" y="424" class="pin" text-anchor="end">D4</text>
+  <text x="484" y="464" class="pin" text-anchor="end">D2</text>
+
+  <!-- Arduino power wires -->
+  <path d="M300,190 V90" class="w wpos"/>
+  <circle cx="300" cy="90" r="4" class="dotpos"/>
+  <path d="M340,490 V640" class="w wgnd"/>
+  <circle cx="340" cy="640" r="4" class="dotgnd"/>
+
+  <!-- 5 V logic: Arduino 5V -> TB6612 VCC and STBY (hops over the VM wire) -->
+  <path d="M380,190 V140 H638 a12,12 0 0 1 24,0 H790 V190" class="w w5v"/>
+  <path d="M720,140 V190" class="w w5v"/>
+  <circle cx="720" cy="140" r="4" class="dot5v"/>
+
+  <!-- ============ TB6612FNG ============ -->
+  <rect x="610" y="190" width="220" height="300" rx="8" class="box"/>
+  <text x="720" y="292" class="name" text-anchor="middle">TB6612FNG</text>
+  <text x="720" y="312" class="note" text-anchor="middle">dual motor driver</text>
+  <text x="720" y="330" class="note" text-anchor="middle">A = left, B = right</text>
+
+  <text x="650" y="206" class="pin" text-anchor="middle">VM</text>
+  <text x="720" y="206" class="pin" text-anchor="middle">VCC</text>
+  <text x="790" y="206" class="pin" text-anchor="middle">STBY</text>
+  <text x="720" y="480" class="pin" text-anchor="middle">GND</text>
+
+  <text x="618" y="254" class="pin">PWMA</text>
+  <text x="618" y="294" class="pin">AIN1</text>
+  <text x="618" y="334" class="pin">AIN2</text>
+  <text x="618" y="384" class="pin">PWMB</text>
+  <text x="618" y="424" class="pin">BIN1</text>
+  <text x="618" y="464" class="pin">BIN2</text>
+
+  <text x="822" y="254" class="pin" text-anchor="end">AO1</text>
+  <text x="822" y="334" class="pin" text-anchor="end">AO2</text>
+  <text x="822" y="404" class="pin" text-anchor="end">BO1</text>
+  <text x="822" y="474" class="pin" text-anchor="end">BO2</text>
+
+  <!-- VM straight up to the battery rail -->
+  <path d="M650,190 V90" class="w wpos"/>
+  <circle cx="650" cy="90" r="4" class="dotpos"/>
+  <!-- TB6612 ground -->
+  <path d="M720,490 V640" class="w wgnd"/>
+  <circle cx="720" cy="640" r="4" class="dotgnd"/>
+
+  <!-- ============ control signals ============ -->
+  <line x1="490" y1="250" x2="610" y2="250" class="w wsig"/>
+  <line x1="490" y1="290" x2="610" y2="290" class="w wsig"/>
+  <line x1="490" y1="330" x2="610" y2="330" class="w wsig"/>
+  <line x1="490" y1="380" x2="610" y2="380" class="w wsig"/>
+  <line x1="490" y1="420" x2="610" y2="420" class="w wsig"/>
+  <line x1="490" y1="460" x2="610" y2="460" class="w wsig"/>
+
+  <!-- ============ motors ============ -->
+  <!-- left pair -->
+  <rect x="930" y="200" width="160" height="48" rx="6" class="box"/>
+  <text x="1015" y="230" class="name" text-anchor="middle">motor &#8212; left front</text>
+  <text x="938" y="219" class="pin" fill="#7b3fa0" font-weight="700">+</text>
+  <text x="938" y="242" class="pin" fill="#7b3fa0" font-weight="700">&#8722;</text>
+
+  <rect x="930" y="270" width="160" height="48" rx="6" class="box"/>
+  <text x="1015" y="300" class="name" text-anchor="middle">motor &#8212; left rear</text>
+  <text x="938" y="289" class="pin" fill="#7b3fa0" font-weight="700">&#8722;</text>
+  <text x="938" y="312" class="pin" fill="#7b3fa0" font-weight="700">+</text>
+
+  <!-- AO1 -> both left "+" terminals -->
+  <path d="M830,250 H880 M880,214 V306 M880,214 H930 M880,306 H930" class="w wmot"/>
+  <circle cx="880" cy="250" r="4" class="dotmot"/>
+  <!-- AO2 -> both left "-" terminals -->
+  <path d="M830,334 H905 M905,236 V334 M905,236 H930 M905,284 H930" class="w wmot"/>
+  <circle cx="905" cy="284" r="4" class="dotmot"/>
+
+  <!-- right pair -->
+  <rect x="930" y="395" width="160" height="48" rx="6" class="box"/>
+  <text x="1015" y="425" class="name" text-anchor="middle">motor &#8212; right front</text>
+  <text x="938" y="414" class="pin" fill="#7b3fa0" font-weight="700">&#8722;</text>
+  <text x="938" y="437" class="pin" fill="#7b3fa0" font-weight="700">+</text>
+
+  <rect x="930" y="465" width="160" height="48" rx="6" class="box"/>
+  <text x="1015" y="495" class="name" text-anchor="middle">motor &#8212; right rear</text>
+  <text x="938" y="484" class="pin" fill="#7b3fa0" font-weight="700">+</text>
+  <text x="938" y="507" class="pin" fill="#7b3fa0" font-weight="700">&#8722;</text>
+
+  <!-- BO1 -> both right "+" terminals -->
+  <path d="M830,404 H905 M905,431 V479 M905,431 H930 M905,479 H930" class="w wmot"/>
+  <circle cx="905" cy="431" r="4" class="dotmot"/>
+  <!-- BO2 -> both right "-" terminals -->
+  <path d="M830,474 H880 M880,409 V501 M880,409 H930 M880,501 H930" class="w wmot"/>
+  <circle cx="880" cy="474" r="4" class="dotmot"/>
+
+  <!-- ============ warning + legend ============ -->
+  <rect x="26" y="470" width="196" height="86" rx="8" fill="#fff4f4" stroke="#d62828" stroke-width="2"/>
+  <text x="46" y="494" font-size="13" font-weight="700" fill="#d62828">&#9888; Battery to VIN</text>
+  <text x="46" y="514" class="note" fill="#a12">never to the 5V pin &#8212;</text>
+  <text x="46" y="530" class="note" fill="#a12">that bypasses the regulator</text>
+  <text x="46" y="546" class="note" fill="#a12">and kills the board.</text>
+
+  <text x="30" y="692" class="note">
+    <tspan fill="#d62828" font-weight="700">&#9679;</tspan> junction &#8212; wires crossing without a dot are <tspan font-weight="700">not</tspan> connected.
+  </text>
+  <text x="470" y="692" class="note">
+    <tspan fill="#d62828">&#9644;</tspan> battery +   <tspan fill="#333333">&#9644;</tspan> ground   <tspan fill="#e07b00">&#9644;</tspan> 5 V logic   <tspan fill="#1a6fd4">&#9644;</tspan> control signals   <tspan fill="#7b3fa0">&#9644;</tspan> motor output
+  </text>
+</svg>
