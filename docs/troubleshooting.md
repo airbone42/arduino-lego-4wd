@@ -42,12 +42,50 @@ In this order:
 ## The motor only hums
 
 Too little PWM. Below roughly 70/255 a TT motor cannot break away. That is what
-`SPEED_MIN` is for — the sketch lifts small throttle values up to it.
+`SPEED_MIN` is for: `percentToSpeed()` maps the whole stick travel onto the usable
+`SPEED_MIN..SPEED_MAX` band, so even 1 % throttle comes out as a value the motor can
+actually act on.
+
+Do **not** solve this by clamping small values up to `SPEED_MIN` instead — we tried
+that first, and it made 1 % and 46 % throttle produce exactly the same speed. The
+lower half of the stick did nothing, and the squaring in the gamepad page that exists
+to give you fine control around centre was thrown away.
+
+## It will not turn on the spot
+
+Spinning is the hardest thing this drivetrain does: all four wheels are pushed
+**sideways** across the floor instead of rolling, and sideways friction is far higher
+than rolling friction. Work through it in this order:
+
+1. **Is the driver hot?** Let it spin for a few seconds, then touch the TB6612. Hand
+   warm is fine. Properly hot means the channel is current limiting, and no software
+   change will help — fit the second driver from [next-steps.md](next-steps.md).
+2. **Do the wheels actually turn?** Draw a marker line across rim *and* tyre, and
+   across axle *and* hub. If the line ends up offset, the tyre is slipping on the rim
+   or the wheel on the shaft, and the motor never had a chance. A cold driver together
+   with stalled wheels points straight at this — a genuinely blocked motor draws its
+   full stall current and would heat the chip up.
+3. **Soften the turn.** `TURN_INNER_SPEED` at `-SPEED_MAX` spins around the centre of
+   the car, which is the worst case for scrub. At `-70` the inner side pushes back
+   more weakly than the outer side pulls, the pivot moves outwards, and the wheels
+   partly roll. Much easier on the motors.
+4. **Shorten the wheelbase.** The further the wheels sit from the centre, the longer
+   the lever they fight. This is why tracked machines are short and stubby, and on a
+   LEGO chassis it costs nothing to try.
+
+Raising `SPEED_MAX` is not the answer. The motors are specified for 3–6 V and 150
+already puts ~5.6 V across them.
 
 ## The car keeps rolling after I let go
 
 The dead man's timeout is 800 ms, so up to ~0.8 s of coasting is by design. Much
 longer than that means commands are queueing — see [build-notes.md](build-notes.md).
+
+A related symptom worth knowing: if it *speeds up* briefly after you release the
+button, that is the queue plus the kick-start. The dead man's switch fires while
+stale commands are still waiting, so the next one arrives at a motor the firmware
+believes is stopped — and gets a full kick. Both control pages keep only one command
+in flight to stop this happening.
 
 ## The gamepad page does not see my controller
 

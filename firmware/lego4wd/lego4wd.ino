@@ -114,8 +114,12 @@ const int SPEED_MIN = 70;
 //   -SPEED_MAX  -> spin on the spot. Powerful, but the tyres scrub
 //                  sideways across the floor: lots of current, and very
 //                  little grip on smooth floors.
-// If it turns too lazily, move this value into the negative (e.g. -60).
-const int TURN_INNER_SPEED = 0;
+// Currently -70. The inner side pushes back, but more weakly than the
+// outer side pulls. That moves the pivot point out of the centre of the
+// car, so the wheels partly roll instead of only scrubbing sideways --
+// which needs far less force than a full -SPEED_MAX spin, where the
+// wheels simply stalled on our floor.
+const int TURN_INNER_SPEED = -70;
 
 // --- Fix a reversed side in software (no re-plugging of wires) ---
 // If one side spins the wrong way, flip the matching flag to true: the
@@ -131,6 +135,27 @@ unsigned long lastCommandMs = 0;
 // the car keeps rolling in the worst case if the link dies - so don't
 // make it huge either.
 const unsigned long TIMEOUT_MS = 800;
+
+// --- Turning on the spot needs more than a normal kick ---
+// When the car spins, all four wheels are pushed sideways across the
+// floor instead of rolling. Static friction takes longer than the usual
+// 120 ms to break -- if the kick ends before that, the wheels just stall.
+const long KICK_TURN_MS = 300;
+
+// PULSING WHILE TURNING: one kick gets it moving, but afterwards the
+// continuous force is not enough against the sideways friction and the
+// wheels stall again. Running at KICK_SPEED permanently is not an option:
+// that would be ~7.5 V on motors built for 3-6 V.
+// So push rhythmically instead. This uses the fact that static friction
+// is higher than kinetic friction: a jolt breaks it more easily than
+// steady pressure, and the motors and driver cool down between pushes.
+const long PULSE_ON  = 150;   // length of the strong push
+const long PULSE_OFF = 250;   // normal speed again for this long
+
+bool pulseActive = false;   // is a push running right now?
+bool spinning    = false;   // turning on the spot? (only then we pulse)
+int  targetLeft = 0, targetRight = 0;   // last command, for re-applying it
+
 bool moving = false;
 
 // --- The phone page (big arrow buttons, hold to drive) ---
@@ -164,10 +189,23 @@ const char PAGE[] = R"HTML(
 </div>
 <p>Hold a button to drive. Let go to stop.</p>
 <script>
+  // The board only manages ~3 requests per second, and the expensive part
+  // is not the reply but every new connection. Send faster than that and
+  // the commands pile up: after letting go the car keeps running through
+  // the queued ones, and if the dead man's switch fires in between, the
+  // next queued command sees a stopped motor and kicks again -- that is
+  // the surprise burst of speed after releasing the button.
+  // So: only ever ONE command in flight, which makes the page throttle
+  // itself to whatever the board can take. Only 'stop' always goes out.
   let timer = null;
-  function send(cmd){ fetch('/'+cmd).catch(()=>{}); }
-  function start(cmd){ send(cmd); clearInterval(timer); timer = setInterval(()=>send(cmd), 150); }
-  function halt(){ clearInterval(timer); send('stop'); }
+  let inFlight = 0;
+  function send(cmd, now){
+    if (inFlight > 0 && !now) return;
+    inFlight++;
+    fetch('/'+cmd).catch(()=>{}).finally(()=>{ inFlight--; });
+  }
+  function start(cmd){ send(cmd, true); clearInterval(timer); timer = setInterval(()=>send(cmd), 120); }
+  function halt(){ clearInterval(timer); send('stop', true); }
   document.querySelectorAll('button').forEach(b=>{
     const cmd = b.dataset.cmd;
     if(cmd === 'stop'){ b.addEventListener('pointerdown', e=>{e.preventDefault(); halt();}); return; }
@@ -246,6 +284,20 @@ void loop() {
   if (moving && (millis() - lastCommandMs > TIMEOUT_MS)) {
     stopMotors();
     moving = false;
+  }
+
+  // Pulse timing while spinning. This has to live here rather than in
+  // drive(): commands only arrive every ~350 ms, but the rhythm should be
+  // steady. The motors are only re-written when the phase changes, not on
+  // every pass through loop().
+  if (spinning && moving) {
+    unsigned long phase = millis() % (PULSE_ON + PULSE_OFF);
+    bool pushNow = (phase < PULSE_ON);
+    if (pushNow != pulseActive) {
+      pulseActive = pushNow;
+      leftSide(targetLeft);
+      rightSide(targetRight);
+    }
   }
 
   // WiFi watchdog: link gone? Stop and reconnect.
@@ -333,8 +385,11 @@ int readParam(const String& line, const char* name) {
 int percentToSpeed(int percent) {
   percent = constrain(percent, -100, 100);
   if (percent == 0) return 0;
-  long speed = (long)abs(percent) * SPEED_MAX / 100;
-  if (speed < SPEED_MIN) speed = SPEED_MIN;   // otherwise it only hums
+  // Only SPEED_MIN..SPEED_MAX is usable -- below that the motor just
+  // hums. So map the stick travel onto exactly that band instead of
+  // lifting small values up: otherwise 1 % and 46 % give the same speed
+  // and the lower half of the stick does nothing at all.
+  long speed = SPEED_MIN + (long)abs(percent) * (SPEED_MAX - SPEED_MIN) / 100;
   return percent > 0 ? (int)speed : -(int)speed;
 }
 
@@ -386,6 +441,9 @@ void printMac() {
 const int  KICK_SPEED = 200;   // 0..255 (~7.5 V on a 9.6 V pack)
 const long KICK_MS    = 120;   // how long the push lasts
 
+// Set by drive() per manoeuvre and used for the next kick.
+long kickDuration = KICK_MS;
+
 // One state pair per side so we can detect the moment we start off
 int  lastSpeedLeft = 0,  lastSpeedRight = 0;
 unsigned long kickUntilLeft = 0, kickUntilRight = 0;
@@ -401,11 +459,11 @@ void driveSide(int speed, bool invert,
   // Starting from standstill OR changing direction -> start the kick
   bool startingOff = (speed != 0) &&
                      (lastSpeed == 0 || (speed > 0) != (lastSpeed > 0));
-  if (startingOff) kickUntil = millis() + KICK_MS;
+  if (startingOff) kickUntil = millis() + kickDuration;
   lastSpeed = speed;
 
   int magnitude = abs(speed);
-  if (magnitude > 0 && millis() < kickUntil) {
+  if (magnitude > 0 && (millis() < kickUntil || pulseActive)) {
     magnitude = max(magnitude, KICK_SPEED);
   }
 
@@ -425,6 +483,14 @@ void rightSide(int speed) {
 }
 
 void drive(int left, int right) {
+  // Sides running against each other means it spins on the spot -> kick
+  // for longer and keep pulsing afterwards (see PULSE_ON above).
+  bool spin = (left > 0 && right < 0) || (left < 0 && right > 0);
+  kickDuration = spin ? KICK_TURN_MS : KICK_MS;
+  spinning     = spin;
+  targetLeft   = left;
+  targetRight  = right;
+
   leftSide(left);
   rightSide(right);
 }
@@ -432,6 +498,9 @@ void drive(int left, int right) {
 void stopMotors() {
   lastSpeedLeft  = 0;   // so the next start gets a kick again
   lastSpeedRight = 0;
+  spinning    = false;  // no more pulsing once it stands still
+  pulseActive = false;
+  targetLeft = 0; targetRight = 0;
   analogWrite(PWMA, 0);
   analogWrite(PWMB, 0);
   digitalWrite(AIN1, LOW);

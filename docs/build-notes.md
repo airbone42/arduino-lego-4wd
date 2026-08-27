@@ -41,6 +41,40 @@ stopped queueing, it ran fine again.
 If you ever need genuinely lower latency: implement **HTTP keep-alive** so the
 connection stays open and the expensive part disappears. We did not need it.
 
+## Turning on the spot needed rhythm, not more power
+
+**Symptom:** with `TURN_INNER_SPEED` at `-SPEED_MAX` the car broke away, moved for a
+moment and then simply stalled — the outer side kept pulling while the inner wheels
+stood still. Propped up in the air it spun happily, so the motors themselves were
+fine.
+
+**Why it is hard:** spinning around the centre pushes all four wheels *sideways*
+across the floor rather than rolling them, and sideways friction is far higher than
+rolling friction. The 120 ms kick-start that gets the car moving in a straight line
+is nowhere near enough here.
+
+Three things fixed it, in this order:
+
+1. **A longer kick for turns.** `drive()` notices that the two sides are running
+   against each other and stretches the kick to `KICK_TURN_MS` (300 ms). That got it
+   moving reliably — and then it stalled again once the kick ended.
+2. **Keep pulsing.** Running at `KICK_SPEED` permanently is not allowed: ~7.5 V on
+   motors built for 3–6 V. So the firmware pushes rhythmically instead, 150 ms on and
+   250 ms off, for as long as the car is spinning. Static friction is higher than
+   kinetic friction, so a jolt breaks it more easily than steady pressure — and the
+   motors and driver cool down in between. The timing lives in `loop()`, not in
+   `drive()`: commands only arrive every ~350 ms and the rhythm has to be steady.
+3. **Stop spinning around the centre.** `TURN_INNER_SPEED = -70` makes the inner side
+   push back more weakly than the outer side pulls. The pivot point moves out of the
+   middle of the car, so the wheels partly roll instead of only scrubbing. This is
+   also why turning has always felt easier with the gamepad: the stick almost never
+   sits at pure rotation, there is nearly always some throttle mixed in.
+
+**Check the driver temperature before reaching for the code.** If the TB6612 gets
+properly hot, the channel is current limiting and none of the above will help —
+that is the case for the second driver in [next-steps.md](next-steps.md). Ours stayed
+hand warm, which is what made the pulsing worth trying.
+
 ## The tyres came off the rims
 
 Skid steering scrubs the tyres sideways across the floor. That pulls the rubber
