@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 720" width="1120" height="720" font-family="Segoe UI, Helvetica, Arial, sans-serif">
-  <rect x="0" y="0" width="1120" height="720" fill="#ffffff"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 1000" width="1120" height="1000" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <rect x="0" y="0" width="1120" height="1000" fill="#ffffff"/>
 
   <style>
     .box    { fill:#f7f8fa; stroke:#334; stroke-width:2; }
@@ -18,7 +18,13 @@
   </style>
 
   <text x="30" y="34" font-size="20" font-weight="700" fill="#223">LEGO 4WD car &#8212; wiring</text>
-  <text x="30" y="56" class="note">One TB6612FNG, two motors in parallel per channel. STBY tied to 5 V, so the driver is always enabled.</text>
+
+  <!-- Step badge: this sheet is three stages, not one big circuit. -->
+  <rect x="30" y="44" width="248" height="26" rx="13" fill="#e8f0fb" stroke="#1a6fd4" stroke-width="1.5"/>
+  <circle cx="47" cy="57" r="9" fill="#1a6fd4"/>
+  <text x="47" y="61" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">1</text>
+  <text x="62" y="62" font-size="13" font-weight="700" fill="#1a6fd4">Build this first &#8212; it drives</text>
+  <text x="292" y="62" class="note">One TB6612FNG, two motors in parallel per channel. STBY tied to 5 V, so the driver is always enabled.</text>
 
   <!-- ============ power rails ============ -->
   <line x1="200" y1="90"  x2="1060" y2="90"  class="w wpos"/>
@@ -63,7 +69,7 @@
   <path d="M340,490 V640" class="w wgnd"/>
   <circle cx="340" cy="640" r="4" class="dotgnd"/>
 
-  <!-- 5 V logic: Arduino 5V -> TB6612 VCC and STBY (hops over the VM wire) -->
+  <!-- 5 V logic: Arduino 5V => TB6612 VCC and STBY (hops over the VM wire) -->
   <path d="M380,190 V140 H638 a12,12 0 0 1 24,0 H790 V190" class="w w5v"/>
   <path d="M720,140 V190" class="w w5v"/>
   <circle cx="720" cy="140" r="4" class="dot5v"/>
@@ -118,10 +124,10 @@
   <text x="938" y="289" class="pin" fill="#7b3fa0" font-weight="700">&#8722;</text>
   <text x="938" y="312" class="pin" fill="#7b3fa0" font-weight="700">+</text>
 
-  <!-- AO1 -> both left "+" terminals -->
+  <!-- AO1 => both left "+" terminals -->
   <path d="M830,250 H880 M880,214 V306 M880,214 H930 M880,306 H930" class="w wmot"/>
   <circle cx="880" cy="250" r="4" class="dotmot"/>
-  <!-- AO2 -> both left "-" terminals -->
+  <!-- AO2 => both left "=" terminals -->
   <path d="M830,334 H905 M905,236 V334 M905,236 H930 M905,284 H930" class="w wmot"/>
   <circle cx="905" cy="284" r="4" class="dotmot"/>
 
@@ -136,10 +142,10 @@
   <text x="938" y="484" class="pin" fill="#7b3fa0" font-weight="700">+</text>
   <text x="938" y="507" class="pin" fill="#7b3fa0" font-weight="700">&#8722;</text>
 
-  <!-- BO1 -> both right "+" terminals -->
+  <!-- BO1 => both right "+" terminals -->
   <path d="M830,404 H905 M905,431 V479 M905,431 H930 M905,479 H930" class="w wmot"/>
   <circle cx="905" cy="431" r="4" class="dotmot"/>
-  <!-- BO2 -> both right "-" terminals -->
+  <!-- BO2 => both right "=" terminals -->
   <path d="M830,474 H880 M880,409 V501 M880,409 H930 M880,501 H930" class="w wmot"/>
   <circle cx="880" cy="474" r="4" class="dotmot"/>
 
@@ -150,10 +156,100 @@
   <text x="46" y="530" class="note" fill="#a12">that bypasses the regulator</text>
   <text x="46" y="546" class="note" fill="#a12">and kills the board.</text>
 
-  <text x="30" y="692" class="note">
+  <!-- ============================================================ -->
+  <!-- OPTIONAL ADD=ONS                                             -->
+  <!-- Drawn as their own panels rather than as long wires across   -->
+  <!-- the whole sheet: both hang off pins that are otherwise free, -->
+  <!-- and neither changes anything above.                          -->
+  <!-- ============================================================ -->
+  <line x1="30" y1="676" x2="1090" y2="676" stroke="#ccd" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <text x="30" y="668" class="note" font-weight="600">Everything below is optional &#8212; the car drives without it. Add one at a time.</text>
+
+  <!-- ========== lights ========== -->
+  <rect x="30" y="690" width="510" height="252" rx="8" fill="#fafbfc" stroke="#aab" stroke-width="1.5" stroke-dasharray="7 4"/>
+  <circle cx="53" cy="716" r="11" fill="#7a8899"/>
+  <text x="53" y="721" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">2</text>
+  <text x="72" y="722" class="name">Lights &#8212; three LEDs on the controller buttons</text>
+  <text x="50" y="744" class="note">Straight from the Arduino pins. Three parts per LED, no soldering.</text>
+
+  <!-- row 1: red on D3 -->
+  <rect x="50" y="757" width="52" height="26" rx="5" fill="#eef2f8" stroke="#1a6fd4" stroke-width="1.5"/>
+  <text x="76" y="775" class="pin" text-anchor="middle" font-weight="700">D3</text>
+  <line x1="102" y1="770" x2="140" y2="770" class="w wsig"/>
+  <rect x="140" y="758" width="96" height="24" rx="6" fill="#f3ead4" stroke="#b79f6a"/>
+  <text x="188" y="775" class="pin" text-anchor="middle">1 k&#8486;</text>
+  <line x1="236" y1="770" x2="272" y2="770" class="w wsig"/>
+  <circle cx="288" cy="770" r="14" fill="#f0463a" stroke="#b3271d" stroke-width="2"/>
+  <line x1="302" y1="770" x2="440" y2="770" class="w wgnd"/>
+
+  <!-- row 2: blue on D5 -->
+  <rect x="50" y="801" width="52" height="26" rx="5" fill="#eef2f8" stroke="#1a6fd4" stroke-width="1.5"/>
+  <text x="76" y="819" class="pin" text-anchor="middle" font-weight="700">D5</text>
+  <line x1="102" y1="814" x2="140" y2="814" class="w wsig"/>
+  <rect x="140" y="802" width="96" height="24" rx="6" fill="#f3ead4" stroke="#b79f6a"/>
+  <text x="188" y="819" class="pin" text-anchor="middle">1 k&#8486;</text>
+  <line x1="236" y1="814" x2="272" y2="814" class="w wsig"/>
+  <circle cx="288" cy="814" r="14" fill="#3a7bf0" stroke="#1d4e91" stroke-width="2"/>
+  <line x1="302" y1="814" x2="440" y2="814" class="w wgnd"/>
+
+  <!-- row 3: green on D6 -->
+  <rect x="50" y="845" width="52" height="26" rx="5" fill="#eef2f8" stroke="#1a6fd4" stroke-width="1.5"/>
+  <text x="76" y="863" class="pin" text-anchor="middle" font-weight="700">D6</text>
+  <line x1="102" y1="858" x2="140" y2="858" class="w wsig"/>
+  <rect x="140" y="846" width="96" height="24" rx="6" fill="#f3ead4" stroke="#b79f6a"/>
+  <text x="188" y="863" class="pin" text-anchor="middle" font-size="11">2&#215; 1 k&#8486; &#8776; 500 &#8486;</text>
+  <line x1="236" y1="858" x2="272" y2="858" class="w wsig"/>
+  <circle cx="288" cy="858" r="14" fill="#35b35a" stroke="#1f7a3a" stroke-width="2"/>
+  <line x1="302" y1="858" x2="440" y2="858" class="w wgnd"/>
+
+  <!-- shared ground bus -->
+  <path d="M440,770 V862" class="w wgnd"/>
+  <circle cx="440" cy="814" r="4" class="dotgnd"/>
+  <circle cx="440" cy="858" r="4" class="dotgnd"/>
+  <path d="M428,868 H452 M432,874 H448 M436,880 H444" class="w wgnd" stroke-width="2"/>
+  <text x="460" y="808" class="pin" fill="#333" font-size="10">short legs (&#8722;)</text>
+  <text x="460" y="822" class="pin" fill="#333" font-size="10">&#8594; GND rail</text>
+
+  <text x="50" y="900" class="note">Long leg (+) faces the resistor, short leg (&#8722;) goes to ground. Which side the</text>
+  <text x="50" y="916" class="note">resistor sits on does not matter &#8212; it limits the whole chain either way.</text>
+  <text x="50" y="932" class="note" fill="#a12" font-weight="600">&#9888; Max 8 mA per pin on the UNO R4 &#8212; not the 220 &#8486; most tutorials still use.</text>
+
+  <!-- ========== ESP32 gamepad bridge ========== -->
+  <rect x="580" y="690" width="510" height="252" rx="8" fill="#fafbfc" stroke="#aab" stroke-width="1.5" stroke-dasharray="7 4"/>
+  <circle cx="603" cy="716" r="11" fill="#7a8899"/>
+  <text x="603" y="721" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">3</text>
+  <text x="622" y="722" class="name">Gamepad straight on the car &#8212; ESP32 bridge</text>
+  <text x="600" y="744" class="note">Talks Bluetooth to the controller, feeds the Arduino over one wire.</text>
+
+  <rect x="600" y="762" width="190" height="118" rx="6" class="box"/>
+  <text x="695" y="802" class="name" text-anchor="middle">ESP32 DevKit</text>
+  <text x="695" y="822" class="note" text-anchor="middle">Bluetooth Classic,</text>
+  <text x="695" y="838" class="note" text-anchor="middle">e.g. DOIT DEVKIT V1</text>
+  <text x="782" y="792" class="pin" text-anchor="end">VIN</text>
+  <text x="782" y="848" class="pin" text-anchor="end">GPIO13</text>
+  <text x="782" y="870" class="pin" text-anchor="end">GND</text>
+
+  <!-- its own 5 V supply, straight in from the right =========== -->
+  <rect x="862" y="758" width="212" height="74" rx="6" class="box"/>
+  <text x="968" y="782" class="name" text-anchor="middle" font-size="13">5 V step-down</text>
+  <text x="968" y="800" class="note" text-anchor="middle">MP1584EN &#8212; set to 5.0 V first</text>
+  <text x="968" y="818" class="note" text-anchor="middle"><tspan fill="#d62828" font-weight="700">&#9679;</tspan> in: V+ rail &#8212; out: 5 V</text>
+  <path d="M862,788 H790" class="w w5v"/>
+
+  <!-- data + ground out to the car ============================= -->
+  <path d="M790,844 H866" class="w wsig"/>
+  <text x="874" y="848" class="pin" fill="#1a6fd4" font-weight="600">&#8594; Arduino D0</text>
+  <path d="M790,866 H866" class="w wgnd"/>
+  <text x="874" y="870" class="pin" fill="#333" font-weight="600">&#8594; GND rail</text>
+
+  <text x="600" y="900" class="note" fill="#a12" font-weight="600">&#9888; Do NOT wire Arduino D1 back to the ESP32 &#8212; that pin drives 5 V into a</text>
+  <text x="600" y="916" class="note" fill="#a12">3.3 V input. The other direction is fine, which is why only D0 is used.</text>
+  <text x="600" y="932" class="note" fill="#a12" font-weight="600">&#9888; Once VIN is connected, never plug in USB as well.</text>
+
+  <text x="30" y="972" class="note">
     <tspan fill="#d62828" font-weight="700">&#9679;</tspan> junction &#8212; wires crossing without a dot are <tspan font-weight="700">not</tspan> connected.
   </text>
-  <text x="470" y="692" class="note">
+  <text x="470" y="972" class="note">
     <tspan fill="#d62828">&#9644;</tspan> battery +   <tspan fill="#333333">&#9644;</tspan> ground   <tspan fill="#e07b00">&#9644;</tspan> 5 V logic   <tspan fill="#1a6fd4">&#9644;</tspan> control signals   <tspan fill="#7b3fa0">&#9644;</tspan> motor output
   </text>
 </svg>

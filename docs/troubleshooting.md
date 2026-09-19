@@ -36,8 +36,8 @@ In this order:
    [build-notes.md](build-notes.md). A motor that gets restarted constantly never
    overcomes static friction.
 3. **Current.** Two motors in parallel on one channel never share fairly. Under load
-   the weaker one drops out. The fix is the second driver in
-   [next-steps.md](next-steps.md).
+   the weaker one drops out. The fix is a second TB6612, one channel per motor —
+   see the pin budget note in [build-notes.md](build-notes.md).
 
 ## The motor only hums
 
@@ -67,7 +67,7 @@ than rolling friction. Work through it in this order:
 
 1. **Is the driver hot?** Let it spin for a few seconds, then touch the TB6612. Hand
    warm is fine. Properly hot means the channel is current limiting, and no software
-   change will help — fit the second driver from [next-steps.md](next-steps.md).
+   change will help — fit a second TB6612 so each motor gets its own channel.
 2. **Do the wheels actually turn?** Draw a marker line across rim *and* tyre, and
    across axle *and* hub. If the line ends up offset, the tyre is slipping on the rim
    or the wheel on the shaft, and the motor never had a chance. A cold driver together

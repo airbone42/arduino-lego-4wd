@@ -8,7 +8,7 @@ soldered permanently to the LEGO, so the bricks survive the project.
 | Qty | Part | What it does | Notes |
 |----|------|--------------|-------|
 | 1 | **Arduino UNO R4 WiFi** | The brain. Runs the web server, talks WiFi, drives the motor driver. | [store.arduino.cc](https://store.arduino.cc/products/uno-r4-wifi). Has WiFi *and* a 12×8 LED matrix on board — both are used here. An UNO R3 will **not** work (no WiFi). |
-| 1 | **TB6612FNG dual motor driver** | The muscle. Takes battery current and switches it to the motors, with direction and PWM speed. | Search *"TB6612FNG breakout"*. Usually ships with unsoldered pin headers — see [soldering.md](soldering.md). A second one is optional, see [next-steps.md](next-steps.md). |
+| 1 | **TB6612FNG dual motor driver** | The muscle. Takes battery current and switches it to the motors, with direction and PWM speed. | Search *"TB6612FNG breakout"*. Usually ships with unsoldered pin headers — see [soldering.md](soldering.md). A second one is optional — it gives each motor its own channel, see [build-notes.md](build-notes.md). |
 | 4 | **Yellow TT gear motors** (3–6 V) | Drive the wheels. | The classic yellow plastic gearbox motors. Buy 5 — one spare, they are the part most likely to fail. |
 | 4 | **Wheels for TT motors** | | Usually sold together with the motors. |
 | 1 | **8× AA battery holder** + **8 AA cells** | Power for everything. | NiMH rechargeables give ~9.6 V and can deliver real current. Alkalines work (12 V, sagging) but a 4×AA holder at 6 V is gentler on the driver. A holder **with a switch** is worth the extra euro. |

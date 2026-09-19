@@ -49,11 +49,16 @@ of it is meant to be understood, not just copied.
 | 4 | **[Wiring](docs/wiring.md)** — the full connection table and why each wire is where it is |
 | 5 | **[Build notes](docs/build-notes.md)** — the mistakes we made, so you can skip them |
 | — | **[Troubleshooting](docs/troubleshooting.md)** — when it does not work |
-| — | **[Next steps](docs/next-steps.md)** — second motor driver, lights, horn |
+| — | **[Next steps](docs/next-steps.md)** — sound, speech, a times-tables game, battery monitoring |
 
 ### Wiring at a glance
 
 ![Wiring diagram](images/wiring-diagram.svg)
+
+The diagram is in three stages: **① is the whole car** and is all you need to drive.
+The two dashed panels below the line — **② lights** and **③ the gamepad bridge** —
+are optional and can be added later, one at a time. Nothing in them changes anything
+in ①.
 
 The Arduino never drives a motor directly — it only sends signals to the TB6612
 driver, which switches the battery current through to the motors. Details and the
@@ -210,14 +215,16 @@ There are children involved, so:
 Planned, with the pin budget already worked out in
 **[docs/next-steps.md](docs/next-steps.md)**:
 
-- **A second TB6612** so every wheel gets its own channel — more current, no more
-  parallel motors fighting over 1.2 A. Mind the pin budget: it collides with the
-  lights, and the fix is one line.
-- **A horn** on a controller button. Carried inside the existing drive command like
-  the lights are, so it costs zero extra HTTP requests — which matters more than you
-  would think, see [build-notes.md](docs/build-notes.md).
-- **A face on the LED matrix** instead of the status icons.
-- HTTP keep-alive, battery monitoring, an ultrasonic "do not hit the wall" sensor.
+- **Sound**, via an **M5Stack ATOM Echo** — a 24 mm cube with a speaker and a
+  microphone. Engine noise that follows the throttle, and a horn.
+- **Speech input**, with an honest look at what a small ESP32 can and cannot do on
+  its own. The nice part: anything that can make an HTTP request can already drive
+  this car, so the voice path needs no new firmware on the Arduino at all.
+- **A times-tables game** — my daughter's idea. The car asks out loud, the question
+  appears on the LED matrix, and she drives onto the right answer. The driving *is*
+  the answer rather than a reward tacked on afterwards.
+- **Battery monitoring**, mostly to make the voltage sag under load visible instead
+  of guessable.
 
 ## Thanks
 

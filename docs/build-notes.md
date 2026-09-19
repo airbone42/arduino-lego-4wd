@@ -72,8 +72,8 @@ Three things fixed it, in this order:
 
 **Check the driver temperature before reaching for the code.** If the TB6612 gets
 properly hot, the channel is current limiting and none of the above will help —
-that is the case for the second driver in [next-steps.md](next-steps.md). Ours stayed
-hand warm, which is what made the pulsing worth trying.
+the cure is then a second TB6612, one channel per motor. Ours stayed hand warm,
+which is what made the pulsing worth trying.
 
 ## The tyres came off the rims
 
@@ -103,7 +103,10 @@ traction is the limit, not power. More PWM just heats the motors.
 - **Motor current.** Four motors on **one** TB6612, two in parallel per channel. A
   channel supplies about **1.2 A continuous**, and parallel motors never share it
   fairly. Under real load — carpet, a slope, a heavy body — one of them can drop out.
-  The fix is a second driver, see [next-steps.md](next-steps.md).
+  The fix is a second TB6612 so each motor gets its own channel. Mind the pin
+  budget: it needs two more PWM pins, and of the six on the UNO R4 only `D11` is
+  still free. Move two lights to analog pins first (an on/off LED does not need
+  PWM) and `D5`/`D6` come back.
 - **Reaction time.** About 150–400 ms per command, dominated by connection setup.
   Fine for a toy, not fine for anything that needs to react.
 - **Kick-start.** 120 ms at `KICK_SPEED = 200` instead of 150 when starting off or
