@@ -1,17 +1,17 @@
 # Next steps
 
 The car works. These are the upgrades we have planned, in the order we intend to do
-them, with the pin budget already worked out. Nothing here is built yet — treat it as
-a design sketch, not tested code.
+them, with the pin budget already worked out. None of the code below is built yet —
+treat it as a design sketch, not tested code.
 
 ## Pins still free
 
-Currently used: `D2`, `D4`, `D7`, `D8`, `D9`, `D10`. `D13` is the on-board LED, and
-the 12×8 LED matrix is internal (no pins).
+Currently used: `D2`, `D4`, `D7`, `D8`, `D9`, `D10` (motors), `D3`, `D5`, `D6`
+(lights), `D0` (the line from the ESP32 gamepad bridge). `D13` is the on-board LED,
+and the 12×8 LED matrix is internal (no pins).
 
-Free and useful: `D3`, `D5`, `D6`, `D11`, `D12`, `A0`–`A5` (analog pins work as plain
-digital pins). PWM-capable on the UNO R4 WiFi: `D3`, `D5`, `D6`, `D9`, `D10`, `D11` —
-so four PWM pins are still available.
+Free and useful: `D11`, `D12`, `A0`–`A5` (analog pins work as plain digital pins).
+`D11` is the only PWM pin still available.
 
 ---
 
@@ -28,12 +28,19 @@ doubles the available current and lets each wheel be driven independently.
 
 ### Pin plan
 
+> ⚠️ **This collides with the lights.** A second driver needs **two more PWM pins**,
+> and the UNO R4 WiFi only has six in total: `D3`, `D5`, `D6`, `D9`, `D10`, `D11`.
+> Four are taken (`D9`/`D10` motors, `D3`/`D5` lights) and `D6` is the green light, so
+> only `D11` is left. Move two of the lights to **analog pins first** — an on/off LED
+> does not need PWM at all, so `A3`/`A4` do the job and `D5`/`D6` come free again.
+> Change the pin numbers in the `lights[]` table, nothing else.
+
 | Function | Pin | Note |
 |----------|-----|------|
-| PWMC — rear left speed | `D5` | PWM |
+| PWMC — rear left speed | `D5` | PWM, freed up by moving the blue light to `A3` |
 | CIN1 — rear left dir | `D12` | |
 | CIN2 — rear left dir | `A0` | used as digital |
-| PWMD — rear right speed | `D6` | PWM |
+| PWMD — rear right speed | `D6` | PWM, freed up by moving the green light to `A4` |
 | DIN1 — rear right dir | `A1` | |
 | DIN2 — rear right dir | `A2` | |
 | STBY (driver 2) | 5 V | same as driver 1 |
@@ -75,145 +82,54 @@ the inner *rear* wheel in a turn reduces tyre scrub noticeably.
 
 ---
 
-## 2. Lights and a horn on the controller buttons
+## 2. A horn on the controller buttons
 
-**The important design decision first.** Do **not** add `/horn` and `/lights`
-endpoints. Every HTTP request costs a new TCP connection, and connection setup is
-the measured bottleneck (60–270 ms — see [build-notes.md](build-notes.md)). Sending
-a separate request for the horn would compete with the drive commands and bring back
-the stuttering we just fixed.
+**Lights are built** — three LEDs on `D3`/`D5`/`D6`, switched from the controller
+buttons. See [wiring.md](wiring.md) for how they are wired and why the resistor value
+is what it is, and the `lights[]` table in the firmware for how to add another one
+(one line there, one in the ESP32 sketch, one in the gamepad page — the order has to
+match, because only numbers go down the wire).
 
-Instead: carry the auxiliary state **inside the drive command** as a bitmask.
-`/drive?l=50&r=50&a=3` — same request, one extra parameter, zero extra connections.
+The horn is the same idea with a buzzer instead of an LED.
+
+**The important design decision first.** Do **not** give it an endpoint of its own.
+Every HTTP request costs a new TCP connection, and connection setup is the measured
+bottleneck (60–270 ms — see [build-notes.md](build-notes.md)). A separate request for
+the horn would compete with the drive commands and bring back the stuttering we just
+fixed. Instead it rides **inside the drive command**, exactly like the lights do:
+`/drive?l=50&r=50&red=1&horn=1` — same request, one more parameter, zero extra
+connections.
 
 ### Pin plan
 
 | Function | Pin | Wiring |
 |----------|-----|--------|
-| Headlights (2× white LED) | `D3` | LED + 220 Ω resistor to GND each. PWM pin, so they can dim. |
-| Tail / brake lights (2× red LED) | `A3` | same, 220 Ω |
-| Beacon / hazards (orange LED) | `A4` | same, 220 Ω |
-| Horn (buzzer) | `D11` | see note below |
-
-An LED at 220 Ω draws about 15 mA, comfortably inside the ~20 mA a pin can source.
-Two LEDs in **parallel**, each with its own resistor, is ~30 mA on one pin — that is
-already at the limit. Either give each LED its own pin, or drive the pair through a
-transistor (a 2N3904 with a 1 kΩ base resistor is plenty).
+| Horn (buzzer) | `D11` | through a transistor, see below |
 
 **The buzzer:** an *active* buzzer just needs `digitalWrite(HIGH)`. A *passive* one
 needs `tone(PIN_HORN, 440)` / `noTone(PIN_HORN)` — which is nicer, because then the
-horn can play different notes and the kids will absolutely want that. Louder buzzers
-draw 30 mA or more, so put a transistor in front of it rather than hanging it
-directly off a pin.
+horn can play different notes and the kids will absolutely want that.
 
-### Firmware sketch
+> ⚠️ **A pin of the UNO R4 may only source 8 mA** (the old UNO allowed 20 mA, which is
+> why most tutorials online say otherwise). Louder buzzers draw 30 mA or more, so put
+> a transistor in front of it rather than hanging it off a pin — a 2N3904 with a 1 kΩ
+> base resistor is plenty.
 
-```cpp
-const int PIN_HEAD   = 3;
-const int PIN_TAIL   = A3;
-const int PIN_BEACON = A4;
-const int PIN_HORN   = 11;
+### Two details that are easy to forget
 
-// bits in the "a" parameter
-const int AUX_HORN   = 1;
-const int AUX_HEAD   = 2;
-const int AUX_BEACON = 4;
-
-int auxBits = 0;
-
-void applyAux(int bits, int left, int right) {
-  auxBits = bits;
-  digitalWrite(PIN_HEAD, (bits & AUX_HEAD) ? HIGH : LOW);
-
-  // The horn is a passive buzzer here
-  if (bits & AUX_HORN) tone(PIN_HORN, 440); else noTone(PIN_HORN);
-
-  // Beacon blinks on its own while the bit is set
-  bool beaconOn = (bits & AUX_BEACON) && ((millis() / 400) % 2);
-  digitalWrite(PIN_BEACON, beaconOn ? HIGH : LOW);
-
-  // Brake light needs no button: on whenever we are stopped or reversing
-  bool braking = (left <= 0 && right <= 0);
-  digitalWrite(PIN_TAIL, braking ? HIGH : LOW);
-}
-```
-
-Hook it into the existing handler:
-
-```cpp
-else if (line.indexOf("GET /drive") >= 0) {
-  int l = percentToSpeed(readParam(line, "?l="));
-  int r = percentToSpeed(readParam(line, "&r="));
-  driveCommand(l, r);
-  applyAux(readParam(line, "&a="), l, r);
-  sendOk(client);
-}
-```
-
-Two details that are easy to forget:
-
-- The **beacon has to keep blinking between commands**, so call
-  `applyAux(auxBits, ...)` once per `loop()` as well, not only when a request arrives.
 - The **dead man's switch must silence the horn.** When the timeout fires and calls
-  `stopMotors()`, also call `noTone(PIN_HORN)`. Otherwise a dropped connection leaves
-  a car screaming under the sofa.
-
-### Controller mapping
-
-Standard Gamepad API button indices — the same on Xbox, PlayStation and most
-generic pads:
-
-| Button | Index | Action |
-|--------|-------|--------|
-| A / ✕ | 0 | horn (hold) |
-| X / ▢ | 2 | headlights (toggle) |
-| Y / △ | 3 | beacon (toggle) |
-| D-pad | 12–15 | already used for driving |
-
-In `controller/gamepad/index.html`, next to `readPad()`:
-
-```js
-let auxState = 0;          // the bitmask we send
-let wasPressed = {};       // for edge detection on the toggles
-
-function readAux(pad) {
-  const down = i => pad.buttons[i] && pad.buttons[i].pressed;
-
-  // Hold-to-sound: horn follows the button directly
-  auxState = down(0) ? (auxState | 1) : (auxState & ~1);
-
-  // Toggles: only react on the rising edge, otherwise they flip 60×/second
-  [[2, 2], [3, 4]].forEach(([button, bit]) => {
-    if (down(button) && !wasPressed[button]) auxState ^= bit;
-    wasPressed[button] = down(button);
-  });
-
-  return auxState;
-}
-```
-
-and append it to the request in `setDrive()`:
-
-```js
-send('/drive?l=' + l + '&r=' + r + '&a=' + auxState);
-```
-
-One catch: `setDrive()` currently only sends when the throttle values *changed*.
-Pressing the horn while standing still would then send nothing. Include `auxState`
-in the change check:
-
-```js
-const changed = (l !== lastL || r !== lastR || auxState !== lastAux);
-```
-
-The phone page can get the same treatment with three extra buttons under the D-pad.
+  `halt()`, also call `noTone(PIN_HORN)`. Otherwise a dropped connection leaves a car
+  screaming under the sofa.
+- A **blinking beacon has to keep blinking between commands**, so it needs to be
+  driven once per `loop()` as well, not only when a request arrives. The plain on/off
+  lights do not have that problem.
 
 ---
 
 ## 3. A face on the LED matrix
 
-The 12×8 matrix currently shows the WiFi state. Once the car is connected that
-information is boring. Ideas that cost nothing but a few arrays:
+The 12×8 matrix already shows the WiFi state when the car stands still and a rotating
+heading arrow while it drives. Ideas that cost nothing but a few arrays:
 
 - eyes that look in the direction it is steering;
 - a mouth that grins when driving forward, flattens when stopped;

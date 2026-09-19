@@ -20,6 +20,12 @@
   NOTE: the very first upload must go over USB, and if you ever flash
   a build that cannot join the WiFi, only the cable will save you.
 
+  LIGHTS: three LEDs can be switched from the controller buttons -
+  red on D3 (button B), blue on D5 (button X), green on D6 (button A).
+  See "Lights" below for how to wire them. To try them without a
+  controller, just open these in a browser:
+      http://<car>/lights?red=1&blue=1&green=1
+
   SAFETY - dead man's switch:
   The car only drives while drive commands keep arriving. The web page
   sends them continuously while a button is held. If they stop (finger
@@ -80,6 +86,81 @@ uint8_t ICON_SEARCH[8][12] = {
   {0,0,0,0,0,0,0,0,0,0,0,0}
 };
 
+// --- Heading as a thin arrow, free to rotate ---
+// Instead of four fixed pictures (forward/back/left/right) we draw the
+// arrow fresh every time: a thin line through the centre with a small V
+// tip at the front. That way it can point in 32 directions and turns
+// like the needle of an instrument. A gentle arc then looks different
+// from a spin on the spot, which is exactly what you want to see while
+// the car is on battery and out of reach.
+uint8_t ICON_ARROW[8][12];
+
+const int   ARROW_STEPS  = 32;      // how many directions it can point in
+const float ARROW_RADIUS = 3.5f;    // half the arrow length, in dots
+const float TIP_LENGTH   = 1.8f;    // length of the two barbs, in dots
+// The barbs sit at 45 degrees behind the tip. Worked out once so we do
+// not have to call sin/cos for them on every redraw.
+const float TIP_COS = 0.7071f;
+const float TIP_SIN = 0.7071f;
+
+int lastStep = -1;   // last direction we drew
+
+// Which picture is on the matrix right now? Without this marker we would
+// rewrite the matrix 50 times a second even though it rarely changes.
+uint8_t (*currentIcon)[12] = nullptr;
+
+void showIcon(uint8_t icon[8][12]) {
+  if (icon == currentIcon) return;
+  currentIcon = icon;
+  matrix.renderBitmap(icon, 8, 12);
+}
+
+void setDot(int x, int y) {
+  if (x >= 0 && x < 12 && y >= 0 && y < 8) ICON_ARROW[y][x] = 1;
+}
+
+// A line from point to point. We walk in as many steps as the longer of
+// the two distances has dots, so no gaps are left.
+void drawLine(float x0, float y0, float x1, float y1) {
+  float dx = x1 - x0, dy = y1 - y0;
+  float far = (fabs(dx) > fabs(dy)) ? fabs(dx) : fabs(dy);
+  int steps = (int)far + 1;
+  for (int i = 0; i <= steps; i++) {
+    float t = (float)i / steps;
+    setDot(lroundf(x0 + dx * t), lroundf(y0 + dy * t));
+  }
+}
+
+void drawArrow(int step) {
+  memset(ICON_ARROW, 0, sizeof(ICON_ARROW));
+
+  const float cx = 5.5f, cy = 3.5f;    // centre of the matrix
+  float a  = step * 2.0f * PI / ARROW_STEPS;
+  float dx = cos(a), dy = sin(a);
+
+  // FIXED length: the arrow rotates inside the middle 8x8 field instead
+  // of stretching depending on direction. It is then the same size in
+  // every direction and turns cleanly like a needle. The two outer
+  // columns stay dark, which is far less distracting than an arrow that
+  // keeps growing and shrinking as it turns.
+  const float L = ARROW_RADIUS;
+
+  float sx = cx + dx * L, sy = cy + dy * L;      // the tip
+  drawLine(cx - dx * L, cy - dy * L, sx, sy);    // the shaft
+
+  // The two barbs start from where the tip ACTUALLY landed. Computed
+  // from the unrounded value they sit askew, because the centre of the
+  // matrix lies between two dots (5.5 / 3.5).
+  float px = lroundf(sx), py = lroundf(sy);
+  for (int s = -1; s <= 1; s += 2) {
+    // rotate the backwards direction (-dx,-dy) by +/- 45 degrees
+    float sa = s * TIP_SIN;
+    float rx = (-dx) * TIP_COS - (-dy) * sa;
+    float ry = (-dx) * sa      + (-dy) * TIP_COS;
+    drawLine(px, py, px + rx * TIP_LENGTH, py + ry * TIP_LENGTH);
+  }
+}
+
 // --- WiFi watchdog ---
 // An earlier version waited for the WiFi in an endless loop inside
 // setup(). When the connection failed the car was simply dead and gave
@@ -121,11 +202,139 @@ const int SPEED_MIN = 70;
 // wheels simply stalled on our floor.
 const int TURN_INNER_SPEED = -70;
 
+// --- Lights ---
+// Three LEDs, each with its own button. Three parts per LED, no soldering:
+//
+//     D3  ---[ resistor ]---  long leg (+) of the RED LED
+//                             short leg (-)          ---  GND
+//     D5  ---[ resistor ]---  long leg (+) of the BLUE LED
+//                             short leg (-)          ---  GND
+//     D6  ---[ resistor ]---  long leg (+) of the GREEN LED
+//                             short leg (-)          ---  GND
+//
+// The LONG leg is plus. Put an LED in the wrong way round and it simply
+// does not light up - it does not break, so let the kids try.
+//
+// WHICH SIDE THE RESISTOR GOES ON DOES NOT MATTER - before the LED or
+// after it, both are correct. Current flows in a loop, so whatever goes
+// through the LED also goes through the resistor: a narrow spot slows the
+// whole hose down no matter where it sits. We still always put it at the
+// pin, so all three chains look the same and every short leg ends up in
+// the same ground rail.
+//
+// THE RESISTOR IS NOT OPTIONAL, not even "just for a moment". An LED does
+// not limit current by itself; without a resistor it draws whatever the
+// pin will give. And the pin is the expensive part here:
+//
+//   *** A pin of the UNO R4 may only source 8 mA. ***
+//
+// The old UNO allowed 20 mA, which is why nearly every tutorial online
+// says "220 ohm". On an R4 that is more than twice the limit, and a pin
+// killed that way stays dead.
+//
+// HOW MUCH RESISTANCE, THEN? Every LED eats part of the voltage itself,
+// and how much depends on the colour. What is left over sits across the
+// resistor and sets the current - (5 V - LED voltage) / resistance:
+//
+//   LED            eats     1 kOhm    500 Ohm    330 Ohm
+//   red            ~2.0 V   3.0 mA    6.0 mA     9.1 mA  <- over the limit
+//   green (pale)   ~2.1 V   2.9 mA    5.8 mA     8.8 mA  <- over the limit
+//   green (bright) ~3.1 V   1.9 mA    3.8 mA     5.8 mA
+//   blue           ~3.2 V   1.8 mA    3.6 mA     5.5 mA
+//
+// Note the two rows for green: there really are two kinds, the old pale
+// (yellowish) one and the modern bright one, and you cannot tell them
+// apart by looking. Measuring the voltage across the LED tells you in ten
+// seconds - a nice little experiment, because the part gives nothing away
+// and the multimeter does.
+//
+// We run 1 kOhm on red and blue, which is bright enough. Green at 1 kOhm
+// turned out too dim, so it gets ~500 Ohm - made from TWO 1 kOhm resistors
+// side by side (in parallel), because our kit has no 470 Ohm. That is a
+// nice thing to show: two resistors next to each other resist LESS than
+// one, the same way two open doors let twice as many people through.
+// 500 Ohm is safe for both kinds of green; a single 330 Ohm would not be.
+//
+// TEST IT WITH NO WIRING AT ALL: the little "L" LED already on the board
+// joins in whenever any light is on (see setLight) - it has its resistor
+// built in. So the button can be checked before a single LED is plugged
+// in, and later, on battery power, it is the simplest proof that the
+// command arrives at all.
+struct Light {
+  const char* name;   // the name used in requests, e.g. ?red=1
+  int         pin;
+  bool        on;
+};
+
+Light lights[] = {
+  { "red",   3, false },  // red LED   -- button B on the controller
+  { "blue",  5, false },  // blue LED  -- button X
+  { "green", 6, false },  // green LED -- button A
+};
+const int LIGHT_COUNT = sizeof(lights) / sizeof(lights[0]);
+
+// Still free for more lights: D11, D12 and A0..A5.
+// In use: D2/D4/D7/D8/D9/D10 (motors), D3/D5/D6 (these LEDs).
+
+// Is any light on? The built-in "L" LED follows this.
+bool anyLightOn() {
+  for (int i = 0; i < LIGHT_COUNT; i++) if (lights[i].on) return true;
+  return false;
+}
+
+// Switch one light. Only touch the pin on a real change: the command
+// arrives many times per second and there is no point rewriting it.
+void setLight(int i, bool on) {
+  if (lights[i].on == on) return;
+  lights[i].on = on;
+  digitalWrite(lights[i].pin, on ? HIGH : LOW);
+  digitalWrite(LED_BUILTIN, anyLightOn() ? HIGH : LOW);
+  Serial.print("Light ");
+  Serial.print(lights[i].name);
+  Serial.println(on ? " ON" : " off");
+}
+
 // --- Fix a reversed side in software (no re-plugging of wires) ---
 // If one side spins the wrong way, flip the matching flag to true: the
 // sketch then internally turns "forward" into "backward" for that side.
 const bool INVERT_LEFT  = true;   // our left side is wired the other way round
 const bool INVERT_RIGHT = true;   // and so is the right one
+
+// --- Gamepad through an ESP32 ---
+// Pin D0 carries the data line from an ESP32 (see firmware/esp32-gamepad/).
+// The ESP32 listens to a Bluetooth game controller and sends one line
+// about 50 times per second:
+//     L,R,red,blue,green\n     e.g. "80,-20,1,0,1"
+// The first two numbers are percent, -100..100 (minus = backwards), then
+// one 1 (on) or 0 (off) per light.
+//
+// ONE wire plus ground, nothing else. The car never answers: D1 is
+// deliberately not connected, because the Arduino would drive 5 V into an
+// ESP32 pin that only tolerates 3.3 V. The other direction is harmless.
+//
+// This is a SECOND source of control next to the browser, not a
+// replacement: whoever sent the last command decides where the car goes.
+// The big win is that no laptop is involved any more - controller and car,
+// nothing else.
+const long GAMEPAD_BAUD = 38400;
+// Why 38400 and not faster? We measured 9600 and 115200, both without a
+// single error. 38400 sits comfortably in between: the line is only 16 %
+// busy, and every single bit lasts three times longer than at 115200 -
+// margin against the electrical noise the motors make.
+char gamepadBuffer[24];
+uint8_t gamepadLen = 0;
+
+// --- Diagnostics: is anything arriving from the ESP32 at all? ---
+// Readable at  http://<car>/status
+// Without these counters you are only guessing: is the ESP32 not sending,
+// or is the Arduino not listening? That exact question cost us half a day.
+// "chars" counts every single byte on D0 - if it stays at 0, nothing is
+// arriving PHYSICALLY (cable, pin or ground). If it counts up, the link is
+// fine and the fault is somewhere else.
+unsigned long gamepadChars  = 0;
+unsigned long gamepadLines  = 0;
+unsigned long gamepadLastMs = 0;
+char gamepadLastLine[24]    = "";
 
 // --- Dead man's switch ---
 unsigned long lastCommandMs = 0;
@@ -197,12 +406,22 @@ const char PAGE[] = R"HTML(
   // the surprise burst of speed after releasing the button.
   // So: only ever ONE command in flight, which makes the page throttle
   // itself to whatever the board can take. Only 'stop' always goes out.
+  // A command needs a DEADLINE. If one fetch() never gets an answer (a lost
+  // WiFi packet), inFlight would stay at 1 forever and no further command
+  // would ever go out - the buttons would be dead while the page still looks
+  // fine. A fetch() on its own only gives up after minutes. 700 ms is above
+  // the slowest measured reply (~550 ms) and below the 800 ms dead man's
+  // switch.
   let timer = null;
   let inFlight = 0;
   function send(cmd, now){
     if (inFlight > 0 && !now) return;
     inFlight++;
-    fetch('/'+cmd).catch(()=>{}).finally(()=>{ inFlight--; });
+    const ctrl = new AbortController();
+    const t    = setTimeout(()=>ctrl.abort(), 700);
+    fetch('/'+cmd, {signal: ctrl.signal})
+      .catch(()=>{})
+      .finally(()=>{ clearTimeout(t); inFlight--; });
   }
   function start(cmd){ send(cmd, true); clearInterval(timer); timer = setInterval(()=>send(cmd), 120); }
   function halt(){ clearInterval(timer); send('stop', true); }
@@ -221,18 +440,26 @@ const char PAGE[] = R"HTML(
 
 void setup() {
   Serial.begin(115200);
+  Serial1.begin(GAMEPAD_BAUD);   // D0/D1 - the line from the ESP32
 
   pinMode(PWMA, OUTPUT); pinMode(AIN1, OUTPUT); pinMode(AIN2, OUTPUT);
   pinMode(PWMB, OUTPUT); pinMode(BIN1, OUTPUT); pinMode(BIN2, OUTPUT);
   stopMotors();
 
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
+  for (int i = 0; i < LIGHT_COUNT; i++) {      // all lights off
+    pinMode(lights[i].pin, OUTPUT);
+    digitalWrite(lights[i].pin, LOW);
+  }
+
   matrix.begin();
-  matrix.renderBitmap(ICON_SEARCH, 8, 12);
+  showIcon(ICON_SEARCH);
 
   // Is the WiFi module there at all?
   if (WiFi.status() == WL_NO_MODULE) {
     Serial.println("WiFi module not found!");
-    matrix.renderBitmap(ICON_ERROR, 8, 12);
+    showIcon(ICON_ERROR);
     return;   // do NOT hang here - loop() keeps trying
   }
 
@@ -245,25 +472,31 @@ void setup() {
 // One connection attempt with a time limit. true = success.
 bool connectWifi() {
   lastWifiAttempt = millis();
-  matrix.renderBitmap(ICON_SEARCH, 8, 12);
+  showIcon(ICON_SEARCH);
   Serial.print("Connecting to WiFi: ");
   Serial.println(ssid);
 
   WiFi.begin(ssid, pass);
   unsigned long started = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - started < WIFI_TIMEOUT_MS) {
-    delay(250);
+    // Keep listening to the controller during the wait, and keep the dead
+    // man's switch alive. This attempt can take 12 seconds - with a plain
+    // delay() in here the car would ignore the controller for that long
+    // and, worse, would happily keep driving on the last command if the
+    // radio link had just died.
+    gamepadAndDeadMan();
+    delay(2);
   }
 
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("No connection. Next attempt in 10 s.");
-    matrix.renderBitmap(ICON_ERROR, 8, 12);
+    showIcon(ICON_ERROR);
     return false;
   }
 
   Serial.print("Connected! Open in a browser:  http://");
   Serial.println(WiFi.localIP());
-  matrix.renderBitmap(ICON_OK, 8, 12);
+  showIcon(ICON_OK);
 
   // Start web server + update receiver only ONCE
   if (!netStarted) {
@@ -280,11 +513,11 @@ bool connectWifi() {
 }
 
 void loop() {
-  // Dead man's switch: no command for too long -> stop
-  if (moving && (millis() - lastCommandMs > TIMEOUT_MS)) {
-    stopMotors();
-    moving = false;
-  }
+  // The gamepad comes FIRST - it needs no WiFi, and further down loop()
+  // bails out with return when there is no network. If this call lived
+  // down there, the car would be dead on the controller too whenever the
+  // WiFi hiccuped. The dead man's switch rides along for the same reason.
+  gamepadAndDeadMan();
 
   // Pulse timing while spinning. This has to live here rather than in
   // drive(): commands only arrive every ~350 ms, but the rhythm should be
@@ -303,11 +536,13 @@ void loop() {
   // WiFi watchdog: link gone? Stop and reconnect.
   if (WiFi.status() != WL_CONNECTED) {
     if (wasConnected) {
-      Serial.println("WiFi lost -- motors off.");
-      stopMotors();
-      moving = false;
+      // This used to cut the motors. Not any more: the car also drives
+      // from the controller, and that path does not need WiFi at all.
+      // If the controller goes quiet as well, the dead man's switch
+      // stops it after TIMEOUT_MS.
+      Serial.println("WiFi lost -- the controller keeps driving.");
       wasConnected = false;
-      matrix.renderBitmap(ICON_ERROR, 8, 12);
+      if (!moving) showIcon(ICON_ERROR);
     }
     if (millis() - lastWifiAttempt > WIFI_RETRY_MS) {
       connectWifi();
@@ -364,14 +599,68 @@ void handleRequest(WiFiClient& client) {
   // (SPEED_MAX) stays here in the sketch and cannot be overridden from
   // the outside.
   else if (line.indexOf("GET /drive")   >= 0) {
-    driveCommand(percentToSpeed(readParam(line, "?l=")),
-                 percentToSpeed(readParam(line, "&r=")));
+    // The lights ride ALONG WITH the drive command instead of getting a
+    // request of their own: a second request means a second TCP
+    // connection, and connection setup is the slowest thing here.
+    // Only touch what was actually sent - the arrow buttons of the phone
+    // page must not switch a light off by accident.
+    lightsFromRequest(line);
+    driveCommandPercent(readParam(line, "?l="),
+                        readParam(line, "&r="));
     sendOk(client);
   }
-  else if (line.indexOf("GET /stop")    >= 0) { stopMotors(); moving = false; sendOk(client); }
+  else if (line.indexOf("GET /stop")    >= 0) { halt(); sendOk(client); }
+  // Switch lights by hand, just open it in a browser:
+  //   http://<car>/lights?red=1            only the red one
+  //   http://<car>/lights?red=0&blue=1     red off, blue on
+  else if (line.indexOf("GET /lights")  >= 0) { lightsFromRequest(line); sendOk(client); }
+  else if (line.indexOf("GET /status")  >= 0) { sendStatus(client); }
+  // SELF TEST of the receiving side. Sends one line OUT on Serial1 (pin
+  // D1). Put a jumper wire from D1 to D0 and the same line has to come
+  // straight back in, with the counters in /status jumping up. That tests
+  // D0, Serial1 and the software WITHOUT the ESP32, so afterwards you
+  // know for certain which side the fault is on instead of interpreting
+  // multimeter readings.
+  // IMPORTANT: unplug the ESP32 wire from D0 first, otherwise two things
+  // transmit onto the same line.
+  else if (line.indexOf("GET /selftest") >= 0) { Serial1.println("0,0,0,0,0"); Serial1.flush(); sendOk(client); }
   else                                        { sendPage(client); }  // "/" and anything else
 
   client.stop();
+}
+
+// Take light states out of a browser request, e.g. "?red=1&blue=0".
+// Only touch what was really sent: the arrow buttons of the phone page
+// should not switch a light off by accident.
+void lightsFromRequest(const String& line) {
+  for (int i = 0; i < LIGHT_COUNT; i++) {
+    String name = String(lights[i].name) + "=";       // e.g. "red="
+    int pos = line.indexOf(name);
+    if (pos <= 0) continue;
+    // There has to be a ? or & in front, otherwise it is a chance match.
+    char before = line.charAt(pos - 1);
+    if (before != '?' && before != '&') continue;
+    setLight(i, line.substring(pos + name.length()).toInt() != 0);
+  }
+}
+
+// Diagnostics for the browser: what actually arrived from the ESP32 on D0?
+//   chars   = single bytes since startup (0 = nothing arrives physically)
+//   lines   = complete lines with a line end
+//   last    = the last line read, as plain text
+//   age_ms  = how long ago that was (below 100 with a live controller)
+// Plenty of print() calls are fine here: you open this page by hand while
+// hunting a fault, so speed does not matter. While driving it would be
+// far too slow (see sendOk).
+void sendStatus(WiFiClient& client) {
+  client.println(F("HTTP/1.1 200 OK"));
+  client.println(F("Content-Type: text/plain"));
+  client.println(F("Connection: close"));
+  client.println();
+  client.print(F("chars="));  client.println(gamepadChars);
+  client.print(F("lines="));  client.println(gamepadLines);
+  client.print(F("last="));   client.println(gamepadLastLine);
+  client.print(F("age_ms=")); client.println(gamepadLines ? (millis() - gamepadLastMs) : 0);
 }
 
 // Pick a number out of the request, e.g. "?l=" from "GET /drive?l=-40&r=80"
@@ -381,22 +670,154 @@ int readParam(const String& line, const char* name) {
   return line.substring(i + strlen(name)).toInt();   // toInt() handles the minus sign
 }
 
-// Turn percent (-100..100) into a PWM value, motor protection included.
-int percentToSpeed(int percent) {
-  percent = constrain(percent, -100, 100);
-  if (percent == 0) return 0;
-  // Only SPEED_MIN..SPEED_MAX is usable -- below that the motor just
-  // hums. So map the stick travel onto exactly that band instead of
-  // lifting small values up: otherwise 1 % and 46 % give the same speed
-  // and the lower half of the stick does nothing at all.
-  long speed = SPEED_MIN + (long)abs(percent) * (SPEED_MAX - SPEED_MIN) / 100;
-  return percent > 0 ? (int)speed : -(int)speed;
+// Turn the two stick percentages (-100..100) into PWM values, motor
+// protection included. BOTH SIDES TOGETHER -- doing them separately is what
+// broke steering:
+//
+// Below SPEED_MIN (70) a motor does not turn, it only hums. When each side
+// went through this on its own, EVERY non-zero value was lifted to at least
+// 70. So between -70 and +70 there was nothing at all: the inner side could
+// only stand still, run forward at 70, or run BACKWARD at 70. Steering a
+// little therefore flipped it straight from "a bit slower" to "full counter
+// drive" and the car spun on the spot instead of driving a curve.
+// Measured: 40 degrees of stick -> inner +85, 50 degrees -> inner -85.
+//
+// Now the FASTER side sets the scale. Only it gets the minimum -- it is the
+// one that has to break the car away from standstill. The other side keeps
+// exactly the ratio from the mix and therefore passes smoothly through zero:
+// 40 degrees -> inner +30, 45 -> 0, 50 -> -30.
+void driveCommandPercent(int percentLeft, int percentRight) {
+  percentLeft  = constrain(percentLeft,  -100, 100);
+  percentRight = constrain(percentRight, -100, 100);
+
+  int fastest = max(abs(percentLeft), abs(percentRight));
+  if (fastest == 0) { driveCommand(0, 0); return; }
+
+  long speed = SPEED_MIN + (long)fastest * (SPEED_MAX - SPEED_MIN) / 100;
+
+  driveCommand((int)((long)percentLeft  * speed / fastest),
+               (int)((long)percentRight * speed / fastest));
 }
 
 void driveCommand(int left, int right) {
   drive(left, right);
   lastCommandMs = millis();
   moving = true;
+  showDirection(left, right);
+}
+
+// --- Stop, and put the display back where it belongs ---
+void halt() {
+  stopMotors();
+  moving = false;
+  showIdle();
+}
+
+// While the car stands still the matrix goes back to showing the WiFi
+// state. Deliberately using the wasConnected marker instead of
+// WiFi.status(): every status query is a radio command to the WiFi
+// co-processor and costs time, and this runs very often.
+void showIdle() {
+  lastStep = -1;   // otherwise the check mark would stick on the next start
+  showIcon(wasConnected ? ICON_OK : ICON_ERROR);
+}
+
+// --- Turn the two side speeds into a heading on the matrix ---
+//   sum        = how hard it drives forward or backward
+//   difference = how hard it pulls to one side
+// Together they make an arrow that can also point diagonally, so a gentle
+// arc looks different from a spin on the spot.
+void showDirection(int left, int right) {
+  float forward = (left + right) / 2.0f;
+  float turn    = (right - left) / 2.0f;
+
+  // MIND HOW THE BOARD IS MOUNTED: in our car the Arduino lies sideways,
+  // so the LEFT edge of the matrix points FORWARD. Hence the rotation:
+  //   forward    ->  to the left in the picture  (so -x)
+  //   left turn  ->  downwards in the picture    (so +y)
+  // Look down on the car once and trace it with a finger and it is
+  // obvious. Mount the board differently and these two lines are all you
+  // need to change.
+  float mx = -forward;
+  float my =  turn;
+
+  if (fabs(mx) < 1.0f && fabs(my) < 1.0f) { showIdle(); return; }
+
+  // Snap the angle to one of the steps. Without snapping we would redraw
+  // on every tiny stick tremble and the picture would flicker.
+  int step = (int)lroundf(atan2(my, mx) * ARROW_STEPS / (2.0f * PI));
+  step = ((step % ARROW_STEPS) + ARROW_STEPS) % ARROW_STEPS;
+
+  if (step == lastStep) return;
+  lastStep = step;
+
+  drawArrow(step);
+  matrix.renderBitmap(ICON_ARROW, 8, 12);
+  currentIcon = ICON_ARROW;
+}
+
+// --- Collect lines coming from the ESP32 ---
+// Only one character arrives at a time. We gather them until a line end
+// shows up, then evaluate the whole line.
+void readGamepad() {
+  while (Serial1.available()) {
+    char c = Serial1.read();
+    gamepadChars++;
+
+    if (c == '\n' || c == '\r') {
+      if (gamepadLen > 0) {
+        gamepadBuffer[gamepadLen] = 0;
+        gamepadLines++;
+        gamepadLastMs = millis();
+        strncpy(gamepadLastLine, gamepadBuffer, sizeof(gamepadLastLine) - 1);
+        gamepadLastLine[sizeof(gamepadLastLine) - 1] = 0;
+        handleGamepadLine(gamepadBuffer);
+        gamepadLen = 0;
+      }
+    } else if (gamepadLen < sizeof(gamepadBuffer) - 1) {
+      gamepadBuffer[gamepadLen++] = c;
+    } else {
+      gamepadLen = 0;   // nonsense or too long -> drop it and start over
+    }
+  }
+}
+
+// Pick field n out of a line "a,b,c,d" (n = 0 is the first). Returns -1
+// when the field does not exist, so an older ESP32 build that sends fewer
+// fields keeps working.
+int readField(const char* line, int n) {
+  for (int i = 0; i < n; i++) {
+    line = strchr(line, ',');
+    if (!line) return -1;
+    line++;
+  }
+  return atoi(line);
+}
+
+// Handle one line "L,R,red,blue,green". Broken lines are ignored in
+// silence: if the car was busy for a moment a line can arrive chopped up.
+// The next one follows 20 ms later anyway.
+void handleGamepadLine(const char* line) {
+  if (!strchr(line, ',')) return;   // without a second field it is no drive command
+
+  // From field 2 onwards come the lights, in the same order as the table.
+  // A missing one leaves that light exactly as it is.
+  for (int i = 0; i < LIGHT_COUNT; i++) {
+    int value = readField(line, 2 + i);
+    if (value >= 0) setLight(i, value != 0);
+  }
+
+  // Exactly the same path as the browser takes: percent in, motor
+  // protection here in the sketch. "0,0" is caught by driveCommand itself.
+  driveCommandPercent(readField(line, 0), readField(line, 1));
+}
+
+// These two belong together: listen to the gamepad AND make sure the car
+// stops when nothing arrives any more. In its own function so it also
+// keeps running during a long WiFi attempt.
+void gamepadAndDeadMan() {
+  readGamepad();
+  if (moving && (millis() - lastCommandMs > TIMEOUT_MS)) halt();
 }
 
 void sendOk(WiFiClient& client) {

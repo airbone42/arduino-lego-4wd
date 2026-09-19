@@ -24,6 +24,14 @@ soldered permanently to the LEGO, so the bricks survive the project.
 | 1 | Soldering iron + thin solder | For the pin headers on the driver and for the motor wires. See [soldering.md](soldering.md). |
 | — | Rubber bands | Poor man's tyres. Slip them over the wheels for grip on hard floors. |
 | 1 | **USB game controller** | Optional second way to drive — anything the browser Gamepad API sees. We use a GameSir T4 Pro; an Xbox or PlayStation pad works the same. |
+| 3 | **LEDs** (red, blue, green) + resistors | Lights on the controller buttons. 1 kΩ each, except green which wants ~500 Ω — see [wiring.md](wiring.md) for why, and why **not** the 220 Ω every tutorial tells you. |
+
+**For the controller straight on the car (no laptop)**
+
+| Qty | Part | What for |
+|----|------|----------|
+| 1 | **ESP32 DevKit** with **Bluetooth Classic** | Pairs with the controller and feeds the Arduino over one wire. Must be a classic ESP32 (e.g. ESP32-D0WD), **not** an S2/S3/C3 — those only do Bluetooth LE, and most gamepads speak Classic. We use a DOIT ESP32 DEVKIT V1. ⚠️ Check whether yours is a WROOM or a WROVER module; on WROVER, GPIO16/17 are unusable, see [troubleshooting.md](troubleshooting.md). |
+| 1 | **5 V step-down converter** (MP1584EN or similar) | Its own supply from the battery. Do **not** run it off the Arduino's 5 V pin — that is how we killed our first board. Set it to 5.0 V with no load and measure before connecting. |
 
 ## What the main parts look like
 

@@ -42,7 +42,7 @@ In this order:
 ## The motor only hums
 
 Too little PWM. Below roughly 70/255 a TT motor cannot break away. That is what
-`SPEED_MIN` is for: `percentToSpeed()` maps the whole stick travel onto the usable
+`SPEED_MIN` is for: `driveCommandPercent()` maps the stick travel onto the usable
 `SPEED_MIN..SPEED_MAX` band, so even 1 % throttle comes out as a value the motor can
 actually act on.
 
@@ -50,6 +50,14 @@ Do **not** solve this by clamping small values up to `SPEED_MIN` instead — we 
 that first, and it made 1 % and 46 % throttle produce exactly the same speed. The
 lower half of the stick did nothing, and the squaring in the gamepad page that exists
 to give you fine control around centre was thrown away.
+
+And do **not** apply the minimum to each side separately, which was our second
+mistake. That leaves nothing between `-SPEED_MIN` and `+SPEED_MIN`: the inner wheel
+can only stand still, run forward at 70 or run backward at 70. Steer a little while
+driving and it jumps straight from "slightly slower" to "full counter drive", so the
+car spins on the spot instead of curving. `driveCommandPercent()` therefore gives the
+minimum only to the **faster** side and scales the other one to keep the ratio from
+the mix — the inner wheel then passes smoothly through zero.
 
 ## It will not turn on the spot
 
@@ -114,3 +122,145 @@ Voltage dips from the motor inrush current. Options: a fresher battery pack, a
 100–470 µF electrolytic capacitor across `VM` and `GND` near the driver, and the
 0.1 µF ceramics across the motor terminals mentioned in
 [soldering.md](soldering.md).
+
+A subtler version of the same picture: **no icon on the matrix, the matrix flickering,
+and the voltage at `VIN` wandering between 5 and 10 V.** That looks like a power
+problem and usually is — but check the **ground wire** first. With no return path the
+current sneaks back through the signal lines to the motor driver: enough to make the
+matrix flicker, not enough to boot. The fastest way to tell the two apart is to hang
+the **Arduino alone on USB from a laptop**. If it boots there, the board is fine and
+it is the supply. Thirty seconds, no guessing.
+
+---
+
+# The ESP32 gamepad bridge
+
+Everything below cost us real time. None of it is visible from the outside.
+
+## No LED, no gamepad — or: what the blue LED means
+
+| Blue on-board LED | Meaning |
+|---|---|
+| steady | controller connected, ready to drive |
+| slow pulse (400 ms on / 600 ms off) | no controller, still searching |
+| three quick flashes | just restarted |
+| nothing at all | the board is not running (no power, or stuck) |
+
+Before we made "searching" pulse, it looked exactly like "dead" — and there is no
+cable on a driving car to check with. That distinction alone saved an hour.
+
+## Is anything reaching the Arduino at all?
+
+Two endpoints on the car answer this without any guessing:
+
+- **`http://<car>/status`** — what arrived on `D0`. `chars` counts every single byte.
+  If it stays at **0**, nothing is arriving *physically* (cable, pin or ground). If it
+  counts up, the link is fine and the fault is elsewhere. `last` shows the last line
+  received, which also tells you **which build** of the ESP32 firmware is running: a
+  line with four fields is an old one, five fields (`L,R,red,blue,green`) is current.
+- **`http://<car>/selftest`** — sends one line out on `D1`. Put a jumper from `D1` to
+  `D0` (unplug the ESP32 wire first!) and the same line has to come back in, with the
+  counters jumping. That tests `D0`, `Serial1` and the software *without* the ESP32,
+  so afterwards you know for certain which side the fault is on.
+
+> ⚠️ **Resistance measurements on microcontroller pins are worthless.** Ours read
+> 700 Ω, then 1.3 MΩ, then 500 kΩ on the same pin — protection diodes, residual charge
+> and active structures inside the chip distort every ohm reading. We nearly rebuilt
+> the whole link to fix a fault that did not exist. The same goes for voltages on a
+> data line: the meter shows an average that moves with the traffic, so 2.1 V and
+> 1.5 V are not two different components. Only a **functional test** is conclusive.
+
+## The upload says it worked, but the old firmware keeps running
+
+This is the nastiest one, because everything *looks* fine: checksum confirmed, script
+reports success — and the board runs the old code. We spent half a day hunting a
+feature that was not in the running build at all.
+
+The cause is `otadata`, the pointer the bootloader uses to pick which half of the
+flash to boot. If it gets stuck on the old half, the upload writes dutifully into the
+other one and the bootloader ignores it. **A flash over the USB cable erases `otadata`
+and repairs it** (`-Usb` / `USB=...`).
+
+This is exactly why the sketch prints a `VERSION` string at startup, and why `/status`
+is worth reading: the version line is the only honest proof that an update arrived.
+"Done" from the upload script is not. **If an update changes nothing, check the
+version first.**
+
+## Bluetooth is dead after every over-the-air update
+
+After an OTA update the ESP32 only does a **software** restart, not a real power
+cycle. The Bluetooth block stays in whatever state it was in and often does not come
+back up. `BP32.update()` then blocks at the top of `loop()`: LED off, no more OTA —
+but **the ping still answers**, because the WiFi runs as its own task. It looks like a
+dying board.
+
+The fix is in the sketch already: **`btStop()` inside `ArduinoOTA.onStart`**. Since
+then an update goes through without a hard reset, and as a bonus the WiFi has the
+antenna to itself during the upload.
+
+## The upload script reports an error although it worked
+
+`espota` restarts the ESP32 the instant the write finishes, then waits for an
+acknowledgement that never comes — and its own error path is broken
+(`NameError: global name 'e' is not defined`, a Python 2 leftover). So it reports a
+failure although everything went fine. The scripts here therefore check the device
+itself (ping: first gone, then back) instead of believing `espota`.
+
+## The board reboots in a loop as soon as Bluetooth and WiFi both run
+
+You called `WiFi.setSleep(false)`. Don't. Both radios share one antenna, and the WiFi
+**must** leave gaps — those pauses are the only time Bluetooth gets the antenna. The
+driver bails out with a very clear message and the board restarts endlessly:
+
+```
+Should enable WiFi modem sleep when both WiFi and Bluetooth are enabled!!!!!!
+```
+
+The default is "sleep on", so simply leave it alone. For the same reason, do not call
+`enableNewBluetoothConnections(true)` permanently — a constant pairing scan on the
+side was enough to make our board disappear after a few minutes.
+
+## A signal pin simply does nothing
+
+Three traps, none of them visible:
+
+- **GPIO16/17** are wired to internal PSRAM on ESP32-**WROVER** modules and are dead
+  to the outside world. On WROOM modules they are free. Same "DEVKIT V1" shape, same
+  silkscreen — our replacement board sent nothing on GPIO17 although the old one had
+  been fine for weeks. If a pin "does nothing", suspect this first.
+- **GPIO12** is a strapping pin: at power-up it sets the flash voltage, and if it is
+  HIGH the board does not boot at all. An idle transmit line sits exactly at HIGH.
+  **GPIO14** wobbles during boot, so the Arduino would get garbage on `D0`.
+- **GPIO34/35, VP and VN can only be inputs.** As a transmit pin they do nothing, and
+  you cannot tell by looking.
+
+`GPIO13` avoids all three. Equally fine: `D25`, `D26`, `D27`, `D32`, `D33`.
+
+## The board died after I connected VIN
+
+Our first one did. The `VIN` wire landed on the **plus rail of the breadboard**, which
+carries the raw 9.6 V from the battery. The AMS1117 regulator tolerates that on paper,
+but it then has to burn 6.3 V instead of 1.7 V as heat, and it shuts down thermally.
+It ran a little longer and was then gone for good (USB chip dead).
+
+> ⚠️ **The plus rail of the breadboard is not the 5 V pin of the Arduino.** Measure
+> against `GND` before connecting: ~5 V is right, 9.6 V is wrong.
+
+And again: once `VIN` is connected, **never plug in USB as well** — on the DEVKIT V1
+those two are tied together.
+
+## Do not leave a serial monitor running while testing
+
+Opening the port pulls DTR/RTS and **resets the ESP32**. In the middle of an OTA
+upload that looks exactly like a broken board, and a monitor that reconnects
+automatically will hold it in a reset loop.
+
+## No COM port at all under Windows
+
+The DEVKIT V1 has a **CP2102** USB chip, and Windows 11 does not ship a driver for it —
+the board gets no COM port. In Device Manager it shows as "CP2102 USB to UART Bridge
+Controller" with **code 28**. Install the
+[Silicon Labs CP210x driver](https://www.silabs.com/developer-tools/usb-to-uart-bridge-vcp-drivers),
+and **extract the ZIP completely**: dragging single files out of the archive window
+leaves the per-architecture subfolders behind, the install then fails with a vague
+error and the driver never lands in the driver store.

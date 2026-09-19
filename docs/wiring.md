@@ -75,6 +75,91 @@ way you have two options:
 
 Option 2 is what we did. Both of ours are `true`.
 
+### Lights (optional)
+
+Three LEDs that the controller buttons switch like light switches: press once = on,
+press again = off.
+
+| LED | Pin | Button | Resistor |
+|-----|-----|--------|----------|
+| red | `D3` | **B** | 1 kΩ |
+| blue | `D5` | **X** | 1 kΩ |
+| green | `D6` | **A** | ~500 Ω (two 1 kΩ in parallel) |
+
+Three parts per LED, no soldering: a jumper from the pin to a free row, the resistor
+from that row to another free row, then the LED with its **long leg** in that row and
+its **short leg** in the ground rail.
+
+**The long leg is plus** (anode) and faces the pin. Two mnemonics for when the legs
+have already been trimmed: *long = long line = plus*, and the rim of the LED head is
+**flattened on the minus side**. Putting one in backwards is harmless — it just does
+not light up.
+
+**Which side the resistor goes on does not matter.** Current flows in a loop, so
+whatever goes through the LED also goes through the resistor: a narrow spot slows the
+whole hose down no matter where it sits. We still always put it at the pin, so all
+three chains look the same and every short leg ends up in the same ground rail.
+
+> ⚠️ **A pin of the UNO R4 may only source 8 mA.** The old UNO allowed 20 mA, which
+> is why nearly every tutorial online says "220 Ω". On an R4 that is more than twice
+> the limit, and a pin killed that way stays dead.
+
+Every LED eats part of the voltage itself, and how much depends on the colour. What
+is left over sits across the resistor and sets the current:
+
+| LED | eats | 1 kΩ | ~500 Ω | 330 Ω |
+|-----|------|------|--------|-------|
+| red | ~2.0 V | 3.0 mA | 6.0 mA | ❌ 9.1 mA |
+| green (pale) | ~2.1 V | 2.9 mA | 5.8 mA | ❌ 8.8 mA |
+| green (bright) | ~3.1 V | 1.9 mA | 3.8 mA | 5.8 mA |
+| blue | ~3.2 V | 1.8 mA | 3.6 mA | 5.5 mA |
+
+Note the two rows for green: there really are two kinds, the old pale (yellowish) one
+and the modern bright one, and you cannot tell them apart by looking. Measuring the
+voltage across the LED settles it in ten seconds — a nice little experiment, because
+the part gives nothing away and the multimeter does.
+
+Green at 1 kΩ turned out too dim for us, so it gets **~500 Ω made from two 1 kΩ
+resistors side by side**, since our kit has no 470 Ω. That is worth showing a child:
+two resistors next to each other resist **less** than one, the same way two open doors
+let twice as many people through. 500 Ω is safe for *both* kinds of green; a single
+330 Ω would not be.
+
+Test it with nothing plugged in at all: the little **"L"** LED already on the board
+joins in whenever any light is on, so you can check the button before wiring anything.
+By hand, in a browser: `http://<car>/lights?red=1&blue=1&green=1`.
+
+### ESP32 gamepad bridge (optional)
+
+This is what cuts the laptop out of the loop — see
+[firmware/esp32-gamepad/](../firmware/esp32-gamepad/). Two wires:
+
+| ESP32 | To |
+|-------|----|
+| **GPIO13** | Arduino **D0** (RX of `Serial1`) |
+| **GND** | Arduino **GND** |
+
+The way back (Arduino `D1` → ESP32) is deliberately **not** wired: the Arduino would
+put 5 V on a pin that only tolerates 3.3 V. This direction is harmless, and measured
+at 0 errors in 250 lines.
+
+> ⚠️ **Give the ESP32 its own 5 V supply** — a small step-down converter (MP1584EN or
+> similar) from the battery into `VIN`. Do **not** feed it from the Arduino's 5 V pin:
+> ours already sagged to 4.7 V at standstill, and the regulator on the ESP32 needs
+> about 1.2 V of headroom. Set the converter to 5.0 V **with no load and measure it**
+> before connecting anything. See [troubleshooting.md](troubleshooting.md) — this is
+> how we killed our first board.
+
+> ⚠️ **Once `VIN` is connected, never plug in USB.** On the DEVKIT V1 the USB 5 V rail
+> and `VIN` are tied together, so two supplies would fight each other.
+
+Pin choice is not arbitrary, and none of the traps are visible from the outside:
+`GPIO16/17` are wired to internal PSRAM on WROVER modules and dead to the outside;
+`GPIO12` is a strapping pin and stops the board booting if it is HIGH at power-up
+(an idle transmit line sits exactly at HIGH); `GPIO34/35`, `VP` and `VN` can only be
+inputs. `GPIO13` avoids all of that and sits on the same pin row as `VIN` and `GND`,
+which matters on a breadboard. Equally fine: `D25`, `D26`, `D27`, `D32`, `D33`.
+
 ## Order of operations (safety)
 
 1. Wire everything up with the **battery disconnected**. Arduino on USB from the PC.

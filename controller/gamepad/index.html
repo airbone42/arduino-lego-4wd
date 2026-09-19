@@ -40,6 +40,9 @@
   <div class="bar"><i id="lBar"></i></div>
   <div class="row"><span>right</span><span id="rVal">0 %</span></div>
   <div class="bar"><i id="rBar"></i></div>
+  <div class="row"><span>red LED (B)</span><span id="lightRed">off</span></div>
+  <div class="row"><span>blue LED (X)</span><span id="lightBlue">off</span></div>
+  <div class="row"><span>green LED (A)</span><span id="lightGreen">off</span></div>
 </div>
 
 <div id="stick"><i></i></div>
@@ -48,12 +51,32 @@
   Plug the controller in and <b>press any button once</b> - browsers only
   report a gamepad after that. Left stick: up/down = throttle, left/right =
   steering. Both at once for curves. Let go to stop.
+  <b>B</b> switches the red LED, <b>X</b> the blue one, <b>A</b> the green one.
 </p>
 
 <script>
 // --- Settings ---
+// Which button switches which light? In the standard mapping the browser
+// Gamepad API counts: 0 = A, 1 = B, 2 = X, 3 = Y. If the wrong button
+// switches, change the number here. The ORDER has to match the lights[]
+// table in the Arduino sketch.
+const LIGHTS = [
+  { name: 'red',   button: 1, display: 'lightRed'   },   // B
+  { name: 'blue',  button: 2, display: 'lightBlue'  },   // X
+  { name: 'green', button: 0, display: 'lightGreen' },   // A
+];
+
 const DEADZONE  = 0.15;   // stick slop around the centre that we ignore
+
+// STRAIGHT-AHEAD HELP: if the stick sits less than this many degrees away
+// from "fully forward" (or "fully back"), that counts as straight and the
+// steering is dropped. Without it you would have to hit the vertical to
+// the degree. Keep this in step with STRAIGHT_DEGREES in the ESP32 sketch
+// so both ways of driving feel the same.
+const STRAIGHT_DEGREES = 15;
+const STRAIGHT_TAN     = Math.tan(STRAIGHT_DEGREES * Math.PI / 180);
 const SEND_MS   = 150;    // minimum gap between two commands
+const REPLY_MS  = 700;    // after this a command counts as lost
 
 // WHY SO SLOW? Measured: the Arduino needs 60-270 ms just to ACCEPT a new
 // TCP connection (answering then only takes ~60 ms), and every fetch() is a
@@ -76,29 +99,78 @@ el('ctx').className   = isSecureContext ? 'ok' : 'bad';
 // --- Send a command to the car ---
 // no-cors: we only want to send, the answer does not interest us.
 let inFlight = 0;   // how many commands are still waiting for a reply
+let lost     = 0;   // how many never came back
 
+// REPLY_MS is the most important line here. Below there is the rule "only
+// ever ONE command in flight". So if a single command never gets an answer,
+// inFlight would stay at 1 forever and NO further command would ever go out:
+// the car stops (dead man's switch) while the page happily keeps drawing the
+// stick, because it draws that from the gamepad, not from the car. A fetch()
+// on its own only gives up after MINUTES when a WiFi packet goes missing, so
+// we abort it ourselves - then .finally() runs, inFlight drops back to 0 and
+// the next command is allowed through.
+// Why 700 ms? Measured, the Arduino answers in 96 ms on average and ~550 ms
+// at worst. 700 is above that (so we never cut off a reply that was still
+// coming) and below the 800 ms dead man's switch in the sketch.
 function send(path) {
   inFlight++;
-  fetch('http://' + el('ip').value.trim() + path, {mode: 'no-cors'})
-    .catch(() => {})
-    .finally(() => { inFlight--; });
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REPLY_MS);
+  fetch('http://' + el('ip').value.trim() + path, {mode: 'no-cors', signal: ctrl.signal})
+    .catch(() => { lost++; })
+    .finally(() => { clearTimeout(timer); inFlight--; });
 }
 
 let lastL = 0, lastR = 0, lastSend = 0;
+
+// --- Lights on buttons ---
+// Each light behaves like a light switch: press once = on, press again = off.
+let lightOn     = LIGHTS.map(() => false);
+let wasPressed  = LIGHTS.map(() => false);
+let lastLights  = LIGHTS.map(() => false);
+
+function readLights(pad) {
+  LIGHTS.forEach((light, i) => {
+    const pressed = !!(pad.buttons[light.button] && pad.buttons[light.button].pressed);
+    // Only the EDGE counts, the change from "released" to "pressed".
+    // Otherwise the light would toggle 60 times a second while a finger
+    // rests on the button.
+    if (pressed && !wasPressed[i]) lightOn[i] = !lightOn[i];
+    wasPressed[i] = pressed;
+
+    const d = el(light.display);
+    d.textContent = lightOn[i] ? 'ON' : 'off';
+    d.className   = lightOn[i] ? 'ok' : '';
+  });
+}
+
+// The lights as parameters on the drive command, e.g. "&red=1&blue=0"
+function lightParams() {
+  return LIGHTS.map((light, i) => '&' + light.name + '=' + (lightOn[i] ? 1 : 0)).join('');
+}
 
 function setDrive(l, r, now) {
   const changed = (l !== lastL || r !== lastR);
   const driving = (l !== 0 || r !== 0);
   const halting = changed && !driving;   // stick was released
+  const lightsChanged = lightOn.some((on, i) => on !== lastLights[i]);
 
-  // Stopping wins: send it immediately, without waiting for the interval or
-  // for a reply. Everything else only goes out when nothing is in flight -
-  // that way the rate adapts by itself to whatever the Arduino can handle
-  // and nothing piles up.
-  if (halting || ((changed || driving) && inFlight === 0 && now - lastSend > SEND_MS)) {
-    send('/drive?l=' + l + '&r=' + r);
+  // Stopping and the lights win: send immediately, without waiting for the
+  // interval or for a reply. The lights for two reasons - a light switch
+  // should not feel sluggish, and standing still nothing would be sent at
+  // all (so you could only switch lights while driving).
+  // Everything else only goes out when nothing is in flight - that way the
+  // rate adapts by itself to whatever the Arduino can handle and nothing
+  // piles up.
+  if (halting || lightsChanged ||
+      ((changed || driving) && inFlight === 0 && now - lastSend > SEND_MS)) {
+    // The lights ride along on the drive command: a request of their own
+    // would be a second connection, and that is the slowest thing here
+    // (see SEND_MS).
+    send('/drive?l=' + l + '&r=' + r + lightParams());
     lastSend = now;
     lastL = l; lastR = r;
+    lastLights = lightOn.slice();
   }
 
   el('lVal').textContent = l + ' %';
@@ -125,17 +197,38 @@ function shapeAxis(v) {
   return Math.sign(v) * stretched * stretched;
 }
 
+// Is the stick nearly straight ahead? Then drop the steering entirely. A
+// wedge of STRAIGHT_DEGREES to the left and right of the vertical, forwards
+// as well as backwards (we only compare magnitudes).
+//
+// Computed on the RAW axes (-1..1), so BEFORE shapeAxis(). That is the only
+// place where the geometry holds: shapeAxis() squares, and after squaring
+// our 15 degrees would quietly have turned into 27.
+function helpGoStraight(sideways, forward) {
+  const slack = Math.abs(forward) * STRAIGHT_TAN;
+  if (Math.abs(sideways) <= slack) return 0;
+  // Do not just cut it off - subtract the slack and stretch what is left,
+  // otherwise the steering would leap from 0 to 27 % at the wedge edge.
+  return Math.sign(sideways) * (Math.abs(sideways) - slack) / (1 - slack);
+}
+
 // --- Mix the stick into two side speeds ---
 function readPad(pad) {
-  let x = shapeAxis(pad.axes[0] || 0);      // steering
-  let y = shapeAxis(-(pad.axes[1] || 0));   // stick up = forward
+  let rawX = pad.axes[0] || 0;        // steering
+  let rawY = -(pad.axes[1] || 0);     // stick up = forward
 
   // The D-pad counts as a fully deflected stick
   const p = i => pad.buttons[i] && pad.buttons[i].pressed;
-  if (p(12)) y =  1;
-  if (p(13)) y = -1;
-  if (p(14)) x = -1;
-  if (p(15)) x =  1;
+  if (p(12)) rawY =  1;
+  if (p(13)) rawY = -1;
+  if (p(14)) rawX = -1;
+  if (p(15)) rawX =  1;
+
+  // Nearly straight? Then perfectly straight.
+  rawX = helpGoStraight(rawX, rawY);
+
+  let x = shapeAxis(rawX);
+  let y = shapeAxis(rawY);
 
   el('stick').firstElementChild.style.transform =
     'translate(' + (x * 44) + 'px, ' + (-y * 44) + 'px)';
@@ -160,6 +253,7 @@ function loop(now) {
   if (pad) {
     el('gp').textContent = pad.id.slice(0, 40);
     el('gp').className = 'ok';
+    readLights(pad);
     const v = readPad(pad);
     setDrive(v[0], v[1], now);
   } else {

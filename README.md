@@ -21,8 +21,13 @@ of it is meant to be understood, not just copied.
 
 - **Drives from any phone or tablet.** The Arduino serves a small web page with
   arrow buttons. No app, no pairing, no cloud — just a browser on your home network.
-- **Drives from a game controller.** A second page reads the analog stick and mixes
-  it into tank steering, so you get proportional throttle and smooth curves.
+- **Drives from a game controller — with no laptop in the middle.** An ESP32 rides on
+  the car, talks Bluetooth to the controller and feeds the Arduino over a single wire.
+  There is also a browser page that does the same job from a laptop, if you would
+  rather not add a second board.
+- **Proportional throttle and steering,** mixed into tank steering, with a 15° wedge
+  around straight ahead so a four-year-old can actually drive it in a straight line.
+- **Three LEDs on the controller buttons,** switched like light switches.
 - **Four-wheel drive, skid steering.** Both left wheels turn together, both right
   wheels turn together. Turn by running one side faster than the other.
 - **Updates over WiFi.** After the first USB upload, new firmware goes on the car in
@@ -30,8 +35,9 @@ of it is meant to be understood, not just copied.
 - **Stops on its own.** If commands stop arriving — finger off the button, browser
   closed, WiFi dropped — the motors cut out after 800 ms.
 - **Says what it is doing.** The Arduino's built-in 12×8 LED matrix shows the WiFi
-  state: check mark, cross, or searching dots. On battery there is no serial monitor,
-  so this is the only debugging you get.
+  state when it stands still — check mark, cross, or searching dots — and a rotating
+  heading arrow while it drives. On battery there is no serial monitor, so this is the
+  only debugging you get.
 
 ## Build it
 
@@ -123,10 +129,36 @@ Both pages talk to the same endpoints:
 | `GET /forward` `/back` `/left` `/right` | fixed-speed steps, used by the arrow buttons |
 | `GET /drive?l=-100..100&r=-100..100` | proportional, per side, in percent |
 | `GET /stop` | stop now |
+| `GET /lights?red=1&blue=0&green=1` | switch lights (they also ride along on `/drive`) |
+| `GET /status` | what is arriving from the ESP32 — see troubleshooting |
+| `GET /selftest` | send a test line out on `D1`, for a `D1`→`D0` loopback check |
 | `GET /` | the phone page |
 
 The pages send **percent**, never raw PWM. The speed cap that protects the motors
 lives in the sketch and cannot be overridden from outside.
+
+### Or: the controller straight on the car
+
+The browser page needs a laptop following the car around. Putting an **ESP32** on the
+car removes it: it pairs with the controller over Bluetooth, does the same mixing, and
+sends the result to the Arduino as one short line over a single wire —
+`L,R,red,blue,green`, 50 times a second.
+
+It is a second source of control, not a replacement: whoever sent the last command
+decides where the car goes, and the dead man's switch covers both. See
+[firmware/esp32-gamepad/](firmware/esp32-gamepad/) for the sketch and
+[docs/wiring.md](docs/wiring.md) for the two wires and the separate 5 V supply it
+needs.
+
+```powershell
+.\tools\ota-esp32.ps1
+```
+
+> ⚠️ The ESP32 has a pile of traps that are invisible from the outside — dead pins on
+> some module variants, uploads that report success while the old firmware keeps
+> running, Bluetooth that does not survive a soft restart. They are all written down
+> in [docs/troubleshooting.md](docs/troubleshooting.md). Read that section *before*
+> you start debugging, not after.
 
 ### Update over WiFi
 
@@ -148,12 +180,15 @@ car to come back online.
 ```
 firmware/
   lego4wd/            the real firmware: WiFi, web page, OTA, motor control
+  esp32-gamepad/      optional: Bluetooth controller bridge on an ESP32
   tests/              build it up in steps: blink → one motor → all four
 controller/
   gamepad/            the game controller page (open locally)
 tools/
   ota-upload.sh       push new firmware over WiFi (Linux/macOS)
   ota-upload.ps1      the same for Windows
+  ota-esp32.sh        the same for the ESP32 bridge (Linux/macOS)
+  ota-esp32.ps1       the same for Windows
 docs/                 parts, wiring, soldering, build notes, troubleshooting
 images/               diagram, photos, screenshots, video
 ```
@@ -176,12 +211,12 @@ Planned, with the pin budget already worked out in
 **[docs/next-steps.md](docs/next-steps.md)**:
 
 - **A second TB6612** so every wheel gets its own channel — more current, no more
-  parallel motors fighting over 1.2 A.
-- **Headlights, brake lights, a beacon and a horn**, mapped to the controller
-  buttons. Carried inside the existing drive command as a bitmask, so it costs zero
-  extra HTTP requests — which matters more than you would think, see
-  [build-notes.md](docs/build-notes.md).
-- **A face on the LED matrix** instead of the WiFi status.
+  parallel motors fighting over 1.2 A. Mind the pin budget: it collides with the
+  lights, and the fix is one line.
+- **A horn** on a controller button. Carried inside the existing drive command like
+  the lights are, so it costs zero extra HTTP requests — which matters more than you
+  would think, see [build-notes.md](docs/build-notes.md).
+- **A face on the LED matrix** instead of the status icons.
 - HTTP keep-alive, battery monitoring, an ultrasonic "do not hit the wall" sensor.
 
 ## Thanks
