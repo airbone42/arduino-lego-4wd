@@ -28,6 +28,9 @@ of it is meant to be understood, not just copied.
 - **Proportional throttle and steering,** mixed into tank steering, with a 15° wedge
   around straight ahead so a four-year-old can actually drive it in a straight line.
 - **Three LEDs on the controller buttons,** switched like light switches.
+- **It makes noise.** A horn on the controller, a starter motor that cranks when the
+  controller connects, and a reversing beeper — all played by a tiny M5Stack ATOM
+  Echo cube, every wave calculated on the fly. See [docs/sound.md](docs/sound.md).
 - **Four-wheel drive, skid steering.** Both left wheels turn together, both right
   wheels turn together. Turn by running one side faster than the other.
 - **Updates over WiFi.** After the first USB upload, new firmware goes on the car in
@@ -48,8 +51,9 @@ of it is meant to be understood, not just copied.
 | 3 | **[Soldering](docs/soldering.md)** — pin headers and motor wires; a good first soldering project |
 | 4 | **[Wiring](docs/wiring.md)** — the full connection table and why each wire is where it is |
 | 5 | **[Build notes](docs/build-notes.md)** — the mistakes we made, so you can skip them |
+| — | **[Sound](docs/sound.md)** — horn, starter and reversing beeper on an ATOM Echo (optional) |
 | — | **[Troubleshooting](docs/troubleshooting.md)** — when it does not work |
-| — | **[Next steps](docs/next-steps.md)** — sound, speech, a times-tables game, battery monitoring |
+| — | **[Next steps](docs/next-steps.md)** — more sound, speech, a times-tables game, battery monitoring |
 
 ### Wiring at a glance
 
@@ -58,7 +62,8 @@ of it is meant to be understood, not just copied.
 The diagram is in three stages: **① is the whole car** and is all you need to drive.
 The two dashed panels below the line — **② lights** and **③ the gamepad bridge** —
 are optional and can be added later, one at a time. Nothing in them changes anything
-in ①.
+in ①. The sound cube is not in the diagram yet; its four wires are in
+[docs/sound.md](docs/sound.md).
 
 The Arduino never drives a motor directly — it only sends signals to the TB6612
 driver, which switches the battery current through to the motors. Details and the
@@ -135,6 +140,7 @@ Both pages talk to the same endpoints:
 | `GET /drive?l=-100..100&r=-100..100` | proportional, per side, in percent |
 | `GET /stop` | stop now |
 | `GET /lights?red=1&blue=0&green=1` | switch lights (they also ride along on `/drive`) |
+| `GET /horn` | a short toot (`/horn?on=0` stops it) — needs the ATOM Echo |
 | `GET /status` | what is arriving from the ESP32 — see troubleshooting |
 | `GET /selftest` | send a test line out on `D1`, for a `D1`→`D0` loopback check |
 | `GET /` | the phone page |
@@ -147,13 +153,14 @@ lives in the sketch and cannot be overridden from outside.
 The browser page needs a laptop following the car around. Putting an **ESP32** on the
 car removes it: it pairs with the controller over Bluetooth, does the same mixing, and
 sends the result to the Arduino as one short line over a single wire —
-`L,R,red,blue,green`, 50 times a second.
+`L,R,red,blue,green,horn,gamepad`, 50 times a second.
 
 It is a second source of control, not a replacement: whoever sent the last command
 decides where the car goes, and the dead man's switch covers both. See
 [firmware/esp32-gamepad/](firmware/esp32-gamepad/) for the sketch and
 [docs/wiring.md](docs/wiring.md) for the two wires and the separate 5 V supply it
-needs.
+needs. Give its ground a wire of its own, straight to the Arduino — sharing the rail
+with the motor current mangles the data while you steer.
 
 ```powershell
 .\tools\ota-esp32.ps1
@@ -186,6 +193,7 @@ car to come back online.
 firmware/
   lego4wd/            the real firmware: WiFi, web page, OTA, motor control
   esp32-gamepad/      optional: Bluetooth controller bridge on an ESP32
+  atom-sound/         optional: horn, starter and reversing beeper on an ATOM Echo
   tests/              build it up in steps: blink → one motor → all four
 controller/
   gamepad/            the game controller page (open locally)
@@ -215,8 +223,8 @@ There are children involved, so:
 Planned, with the pin budget already worked out in
 **[docs/next-steps.md](docs/next-steps.md)**:
 
-- **Sound**, via an **M5Stack ATOM Echo** — a 24 mm cube with a speaker and a
-  microphone. Engine noise that follows the throttle, and a horn.
+- **More sound** — an engine note that follows the throttle, one-shot sounds, and a
+  bigger speaker, because the one in the cube is honestly too quiet.
 - **Speech input**, with an honest look at what a small ESP32 can and cannot do on
   its own. The nice part: anything that can make an HTTP request can already drive
   this car, so the voice path needs no new firmware on the Arduino at all.

@@ -156,8 +156,9 @@ Two endpoints on the car answer this without any guessing:
 - **`http://<car>/status`** — what arrived on `D0`. `chars` counts every single byte.
   If it stays at **0**, nothing is arriving *physically* (cable, pin or ground). If it
   counts up, the link is fine and the fault is elsewhere. `last` shows the last line
-  received, which also tells you **which build** of the ESP32 firmware is running: a
-  line with four fields is an old one, five fields (`L,R,red,blue,green`) is current.
+  received, which also tells you **which build** of the ESP32 firmware is running:
+  seven fields (`L,R,red,blue,green,horn,gamepad`) is current, anything shorter is an
+  old build. `bad` counts lines that arrived mangled and were thrown away — see below.
 - **`http://<car>/selftest`** — sends one line out on `D1`. Put a jumper from `D1` to
   `D0` (unplug the ESP32 wire first!) and the same line has to come back in, with the
   counters jumping. That tests `D0`, `Serial1` and the software *without* the ESP32,
@@ -169,6 +170,44 @@ Two endpoints on the car answer this without any guessing:
 > the whole link to fix a fault that did not exist. The same goes for voltages on a
 > data line: the meter shows an average that moves with the traffic, so 2.1 V and
 > 1.5 V are not two different components. Only a **functional test** is conclusive.
+
+## LEDs flash and the horn croaks while steering
+
+Standing still everything is fine. Steer hard — especially turning on the spot, where
+the car pulses the motors — and LEDs flash that nobody switched on, and the horn
+comes out as a croak.
+
+**Cause:** the line from the ESP32 to the Arduino (`D0`) loses characters whenever
+the motors pull a lot of current. We counted: **0** mangled lines in three minutes
+standing still, **33** in about 15 seconds of hard steering. What arrived looked like
+this:
+
+```
+-100100,0,0,0,0,1        a comma swallowed
+-100,100,00,0,0,1        a comma swallowed, "00"
+0,0,0,1,1                the START of the line lost - looks valid, means "blue on, horn on"
+```
+
+One mangled line switches a light or the horn on for 20 ms, until the next good line
+switches it off again. Many of those in a row sound like croaking.
+
+**Why:** the motor current flows back to the battery through the ground wires. If the
+ESP32's ground shares the breadboard rail with that current, "0 V" at the ESP32 is
+briefly not the same as "0 V" at the Arduino — and a 3.3 V signal going into a 5 V
+board has little margin to lose.
+
+**The real fix — a ground wire of its own:** run the ESP32's `GND` (and the ATOM's)
+**straight to a GND pin of the Arduino** instead of via the rail. The UNO has three
+GND pins; there is room. This is what cured it for us, immediately. If you still see
+errors: twist each data wire together with its ground wire, and put an electrolytic
+capacitor across `VM`/`GND` at the motor driver (see "The Arduino resets when the
+motors start" above).
+
+**The safety net in software:** the Arduino checks every line field by field — speeds
+between −100 and 100, lights, horn and controller exactly `0` or `1`, and **all seven
+fields present** — and throws away anything else. Switches only count once they
+arrive the same **twice in a row**. `http://<car>/status` shows how many lines were
+thrown away (`bad`) and the last one (`last_bad`); watch it while you steer.
 
 ## The upload says it worked, but the old firmware keeps running
 

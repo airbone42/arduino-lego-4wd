@@ -137,11 +137,17 @@ This is what cuts the laptop out of the loop — see
 | ESP32 | To |
 |-------|----|
 | **GPIO13** | Arduino **D0** (RX of `Serial1`) |
-| **GND** | Arduino **GND** |
+| **GND** | Arduino **GND** — its own wire, straight to a GND pin |
 
 The way back (Arduino `D1` → ESP32) is deliberately **not** wired: the Arduino would
 put 5 V on a pin that only tolerates 3.3 V. This direction is harmless, and measured
 at 0 errors in 250 lines.
+
+> ⚠️ **Give the data line a clean ground.** Run the ESP32's `GND` straight to one of
+> the Arduino's GND pins, not via the breadboard rail that carries the motor current.
+> Sharing the rail cost us 33 mangled lines in 15 seconds of steering — flashing LEDs
+> and a croaking horn. See
+> [troubleshooting.md](troubleshooting.md#leds-flash-and-the-horn-croaks-while-steering).
 
 > ⚠️ **Give the ESP32 its own 5 V supply** — a small step-down converter (MP1584EN or
 > similar) from the battery into `VIN`. Do **not** feed it from the Arduino's 5 V pin:
@@ -159,6 +165,25 @@ Pin choice is not arbitrary, and none of the traps are visible from the outside:
 (an idle transmit line sits exactly at HIGH); `GPIO34/35`, `VP` and `VN` can only be
 inputs. `GPIO13` avoids all of that and sits on the same pin row as `VIN` and `GND`,
 which matters on a breadboard. Equally fine: `D25`, `D26`, `D27`, `D32`, `D33`.
+
+### Sound — ATOM Echo (optional)
+
+Horn, starter and reversing beeper — see [sound.md](sound.md) for the whole story.
+The 4-hole header on the bottom of the cube, counted from the end **away from** the
+Grove socket:
+
+| ATOM | To |
+|------|----|
+| **G21** | nothing |
+| **G25** | Arduino **D1** through **1 kΩ**, and from `G25` **2 kΩ** to GND |
+| **5V** | 5 V from the step-down converter (the same one as the ESP32) |
+| **GND** | Arduino **GND** — its own wire, straight to a GND pin |
+
+The divider brings the Arduino's 5 V down to the 3.3 V the ATOM tolerates. The
+5-hole header on the other side belongs to the speaker and microphone.
+
+> ⚠️ **5 V from the converter and USB never at the same time.** To update the ATOM,
+> pull the 5 V wire first.
 
 ## Order of operations (safety)
 

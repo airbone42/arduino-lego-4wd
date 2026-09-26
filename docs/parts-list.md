@@ -33,6 +33,13 @@ soldered permanently to the LEGO, so the bricks survive the project.
 | 1 | **ESP32 DevKit** with **Bluetooth Classic** | Pairs with the controller and feeds the Arduino over one wire. Must be a classic ESP32 (e.g. ESP32-D0WD), **not** an S2/S3/C3 — those only do Bluetooth LE, and most gamepads speak Classic. We use a DOIT ESP32 DEVKIT V1. ⚠️ Check whether yours is a WROOM or a WROVER module; on WROVER, GPIO16/17 are unusable, see [troubleshooting.md](troubleshooting.md). |
 | 1 | **5 V step-down converter** (MP1584EN or similar) | Its own supply from the battery. Do **not** run it off the Arduino's 5 V pin — that is how we killed our first board. Set it to 5.0 V with no load and measure before connecting. |
 
+**For sound**
+
+| Qty | Part | What for |
+|----|------|----------|
+| 1 | **M5Stack ATOM Echo** | Horn, starter motor, reversing beeper — see [sound.md](sound.md). A 24 mm cube with its own ESP32, speaker and microphone. ⚠️ Not the "Atomic Echo Base", which has no processor. Runs off the same 5 V converter as the ESP32. |
+| 1 + 1 | Resistors **1 kΩ** and **2 kΩ** | The divider that brings the Arduino's 5 V signal down to 3.3 V for the ATOM. |
+
 ## What the main parts look like
 
 | | | |

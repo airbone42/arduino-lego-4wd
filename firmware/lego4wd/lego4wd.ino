@@ -26,6 +26,11 @@
   controller, just open these in a browser:
       http://<car>/lights?red=1&blue=1&green=1
 
+  SOUND: an M5Stack ATOM Echo on D1 plays the horn (button Y), a starter
+  motor when the controller connects and a reversing beeper. The car only
+  tells it what is going on; the sounds are made in firmware/atom-sound/.
+  To try the horn without a controller:  http://<car>/horn
+
   SAFETY - dead man's switch:
   The car only drives while drive commands keep arriving. The web page
   sends them continuously while a button is held. If they stop (finger
@@ -294,6 +299,31 @@ void setLight(int i, bool on) {
   Serial.println(on ? " ON" : " off");
 }
 
+// --- Horn and sounds ---
+// The sounds themselves live in an M5Stack ATOM Echo, a small cube with its
+// own ESP32 and speaker (firmware/atom-sound/). The car only tells it over D1
+// what is going on, as one line "L,R,horn,gamepad", e.g. "150,110,1,1".
+// From L and R (the motor speeds) the ATOM makes the reversing beeper, from
+// "gamepad" the starter sound when the controller connects. New fields always
+// go at the END, so an ATOM with older firmware keeps working.
+// D1 puts out 5 V and the ATOM only tolerates 3.3 V: a divider of 1 kOhm
+// and 2 kOhm sits in between, see docs/wiring.md.
+//
+// The horn has its own dead man's switch: it only stays on while "honk!"
+// keeps coming in. Otherwise the car would honk forever if the link died
+// exactly while honking.
+const unsigned long HORN_TIMEOUT_MS = 800;   // same as the motors
+bool          hornOn          = false;
+unsigned long hornLastMs      = 0;
+bool          gamepadConnected = false;       // reported by the ESP32, for the starter sound
+
+void setHorn(bool on) {
+  if (on) hornLastMs = millis();   // every "on" extends it
+  if (hornOn == on) return;
+  hornOn = on;
+  Serial.println(on ? "Horn ON" : "Horn off");
+}
+
 // --- Fix a reversed side in software (no re-plugging of wires) ---
 // If one side spins the wrong way, flip the matching flag to true: the
 // sketch then internally turns "forward" into "backward" for that side.
@@ -304,13 +334,18 @@ const bool INVERT_RIGHT = true;   // and so is the right one
 // Pin D0 carries the data line from an ESP32 (see firmware/esp32-gamepad/).
 // The ESP32 listens to a Bluetooth game controller and sends one line
 // about 50 times per second:
-//     L,R,red,blue,green\n     e.g. "80,-20,1,0,1"
+//     L,R,red,blue,green,horn,gamepad\n     e.g. "80,-20,1,0,1,0,1"
 // The first two numbers are percent, -100..100 (minus = backwards), then
-// one 1 (on) or 0 (off) per light.
+// one 1 (on) or 0 (off) per light, the horn (1 while Y is held) and whether
+// a controller is connected at all.
 //
-// ONE wire plus ground, nothing else. The car never answers: D1 is
-// deliberately not connected, because the Arduino would drive 5 V into an
-// ESP32 pin that only tolerates 3.3 V. The other direction is harmless.
+// ONE wire plus ground, nothing else. The car never answers the ESP32: D1
+// goes to the ATOM Echo instead (through a divider, see "Horn and sounds").
+//
+// GROUND MATTERS. Give the ESP32 its own ground wire straight to a GND pin
+// of the Arduino, NOT via the breadboard rail that carries the motor
+// current back to the battery. With a shared rail the line lost characters
+// every time the motors pulled hard (see isValidLine below).
 //
 // This is a SECOND source of control next to the browser, not a
 // replacement: whoever sent the last command decides where the car goes.
@@ -335,6 +370,10 @@ unsigned long gamepadChars  = 0;
 unsigned long gamepadLines  = 0;
 unsigned long gamepadLastMs = 0;
 char gamepadLastLine[24]    = "";
+// Lines that arrived mangled and were thrown away (see isValidLine).
+// If this climbs while steering, the motors are disturbing the D0 line.
+unsigned long gamepadBad    = 0;
+char gamepadLastBad[24]     = "";
 
 // --- Dead man's switch ---
 unsigned long lastCommandMs = 0;
@@ -614,6 +653,9 @@ void handleRequest(WiFiClient& client) {
   //   http://<car>/lights?red=1            only the red one
   //   http://<car>/lights?red=0&blue=1     red off, blue on
   else if (line.indexOf("GET /lights")  >= 0) { lightsFromRequest(line); sendOk(client); }
+  // Horn by hand:  http://<car>/horn       -> a short toot (dead man's switch 800 ms)
+  //                http://<car>/horn?on=0  -> silent at once
+  else if (line.indexOf("GET /horn")    >= 0) { setHorn(line.indexOf("on=0") < 0); sendOk(client); }
   else if (line.indexOf("GET /status")  >= 0) { sendStatus(client); }
   // SELF TEST of the receiving side. Sends one line OUT on Serial1 (pin
   // D1). Put a jumper wire from D1 to D0 and the same line has to come
@@ -623,7 +665,7 @@ void handleRequest(WiFiClient& client) {
   // multimeter readings.
   // IMPORTANT: unplug the ESP32 wire from D0 first, otherwise two things
   // transmit onto the same line.
-  else if (line.indexOf("GET /selftest") >= 0) { Serial1.println("0,0,0,0,0"); Serial1.flush(); sendOk(client); }
+  else if (line.indexOf("GET /selftest") >= 0) { Serial1.println("0,0,0,0,0,0,0"); Serial1.flush(); sendOk(client); }
   else                                        { sendPage(client); }  // "/" and anything else
 
   client.stop();
@@ -649,6 +691,8 @@ void lightsFromRequest(const String& line) {
 //   lines   = complete lines with a line end
 //   last    = the last line read, as plain text
 //   age_ms  = how long ago that was (below 100 with a live controller)
+//   bad     = lines thrown away because they arrived mangled
+//   last_bad = the last of those, as plain text
 // Plenty of print() calls are fine here: you open this page by hand while
 // hunting a fault, so speed does not matter. While driving it would be
 // far too slow (see sendOk).
@@ -661,6 +705,8 @@ void sendStatus(WiFiClient& client) {
   client.print(F("lines="));  client.println(gamepadLines);
   client.print(F("last="));   client.println(gamepadLastLine);
   client.print(F("age_ms=")); client.println(gamepadLines ? (millis() - gamepadLastMs) : 0);
+  client.print(F("bad="));    client.println(gamepadBad);
+  client.print(F("last_bad=")); client.println(gamepadLastBad);
 }
 
 // Pick a number out of the request, e.g. "?l=" from "GET /drive?l=-40&r=80"
@@ -783,8 +829,7 @@ void readGamepad() {
 }
 
 // Pick field n out of a line "a,b,c,d" (n = 0 is the first). Returns -1
-// when the field does not exist, so an older ESP32 build that sends fewer
-// fields keeps working.
+// when the field does not exist.
 int readField(const char* line, int n) {
   for (int i = 0; i < n; i++) {
     line = strchr(line, ',');
@@ -794,18 +839,88 @@ int readField(const char* line, int n) {
   return atoi(line);
 }
 
-// Handle one line "L,R,red,blue,green". Broken lines are ignored in
-// silence: if the car was busy for a moment a line can arrive chopped up.
-// The next one follows 20 ms later anyway.
+// Does the line look like a real one?
+// While steering, the motors pull so much current that D0 now and then
+// loses a character or picks up garbage. "0,0,1,0,0,0,1" turns into
+// "0,01,0,0,0,1" - one comma gone, and the red light reads "01", i.e. ON.
+// That is exactly how LEDs lit up that nobody had switched on, and how the
+// horn twitched for 20 ms at a time (it sounded like croaking). We measured
+// 0 bad lines standing still and 33 in about 15 s of hard steering.
+// So every field is checked:
+//   fields 0 and 1 (speed):          a number from -100 to 100
+//   lights, horn, gamepad:           exactly one digit, 0 or 1
+//   anything after that (future):    digits only
+// When in doubt, throw it away - the next line is only 20 ms behind.
+// The real cure is a clean ground wire (see "Gamepad through an ESP32");
+// this check is the safety net.
+bool isValidLine(const char* line) {
+  const int LAST_SWITCH = 3 + LIGHT_COUNT;   // lights, horn, gamepad
+  int field = 0;
+  const char* p = line;
+  while (true) {
+    const char* start = p;
+    if (field < 2 && *p == '-') p++;
+    int digits = 0;
+    while (isdigit((unsigned char)*p)) { p++; digits++; }
+
+    if (field < 2) {
+      if (digits < 1 || digits > 3 || abs(atoi(start)) > 100) return false;
+    } else if (field <= LAST_SWITCH) {
+      if (digits != 1 || (*start != '0' && *start != '1')) return false;
+    } else {
+      if (digits < 1) return false;
+    }
+
+    field++;
+    if (*p == 0) break;          // end of line: done
+    if (*p != ',') return false; // some stray character
+    p++;
+  }
+  // ALL fields have to be there. When the START of a line is lost, the rest
+  // often looks valid: "-100,-100,0,0,0,1,1" becomes "0,0,0,1,1", which would
+  // mean "blue on, horn on". The price: an ESP32 with OLDER firmware (fewer
+  // fields) is no longer understood. More fields (newer firmware) still work.
+  return field >= 4 + LIGHT_COUNT;   // L, R, lights, horn, gamepad
+}
+
+// Only believe a switch once it arrives the SAME TWICE IN A ROW.
+// Even a line that passes the check above can be mangled - but two in a row
+// mangled in exactly the same way is next to impossible. Costs 20 ms of
+// delay, which nobody notices.
+// i = number of the switch (0 = first light ... horn ... gamepad).
+const int SWITCH_COUNT = LIGHT_COUNT + 2;
+int switchBefore[SWITCH_COUNT];   // starts at 0 = "off"
+
+bool switchConfirmed(int i, int value) {
+  bool same = (value == switchBefore[i]);
+  switchBefore[i] = value;
+  return same;
+}
+
+// Handle one line "L,R,red,blue,green,horn,gamepad".
 void handleGamepadLine(const char* line) {
-  if (!strchr(line, ',')) return;   // without a second field it is no drive command
+  if (!isValidLine(line)) {
+    gamepadBad++;
+    strncpy(gamepadLastBad, line, sizeof(gamepadLastBad) - 1);
+    gamepadLastBad[sizeof(gamepadLastBad) - 1] = 0;
+    return;
+  }
 
   // From field 2 onwards come the lights, in the same order as the table.
-  // A missing one leaves that light exactly as it is.
   for (int i = 0; i < LIGHT_COUNT; i++) {
     int value = readField(line, 2 + i);
-    if (value >= 0) setLight(i, value != 0);
+    if (switchConfirmed(i, value)) setLight(i, value != 0);
   }
+
+  // After the lights comes the horn.
+  int horn = readField(line, 2 + LIGHT_COUNT);
+  if (switchConfirmed(LIGHT_COUNT, horn)) setHorn(horn != 0);
+
+  // And after that, whether a controller is connected at all. The car does
+  // not need this itself, but passes it on to the ATOM: it plays the
+  // starter sound when a controller connects.
+  int gamepad = readField(line, 3 + LIGHT_COUNT);
+  if (switchConfirmed(LIGHT_COUNT + 1, gamepad)) gamepadConnected = (gamepad != 0);
 
   // Exactly the same path as the browser takes: percent in, motor
   // protection here in the sketch. "0,0" is caught by driveCommand itself.
@@ -818,6 +933,41 @@ void handleGamepadLine(const char* line) {
 void gamepadAndDeadMan() {
   readGamepad();
   if (moving && (millis() - lastCommandMs > TIMEOUT_MS)) halt();
+  if (hornOn && (millis() - hornLastMs > HORN_TIMEOUT_MS)) setHorn(false);
+  // Nothing from the ESP32 any more means no controller either.
+  if (millis() - gamepadLastMs > TIMEOUT_MS) gamepadConnected = false;
+  sendSound();
+}
+
+// --- Tell the ATOM Echo what is going on ---
+// A new line goes out as soon as something changes - horn and controller at
+// once, the motor speeds at most every 50 ms (otherwise D1 would be busy all
+// the time with 50 controller lines per second). If nothing changes, a line
+// still goes out every 200 ms as a heartbeat: if that stops, the ATOM falls
+// silent by itself after 500 ms.
+const unsigned long SOUND_MIN_GAP_MS   = 50;
+const unsigned long SOUND_HEARTBEAT_MS = 200;
+
+void sendSound() {
+  static int           sentLeft = 0, sentRight = 0;
+  static bool          sentHorn = false, sentGamepad = false;
+  static unsigned long sentMs = 0;
+
+  unsigned long since = millis() - sentMs;
+  bool switchesNew = (hornOn != sentHorn || gamepadConnected != sentGamepad);
+  bool speedNew    = (targetLeft != sentLeft || targetRight != sentRight);
+  if (!switchesNew && !(speedNew && since >= SOUND_MIN_GAP_MS)
+      && since < SOUND_HEARTBEAT_MS) return;
+
+  // Everything in ONE print() - same reason as in sendOk().
+  char line[24];
+  snprintf(line, sizeof(line), "%d,%d,%d,%d\n", targetLeft, targetRight,
+           hornOn ? 1 : 0, gamepadConnected ? 1 : 0);
+  Serial1.print(line);
+
+  sentLeft = targetLeft;  sentRight = targetRight;
+  sentHorn = hornOn;      sentGamepad = gamepadConnected;
+  sentMs = millis();
 }
 
 void sendOk(WiFiClient& client) {

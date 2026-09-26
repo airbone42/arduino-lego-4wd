@@ -6,9 +6,12 @@
   left and the right side should run, and sends that to the Arduino as a
   short text line over a single wire.
 
-  The line looks like this:   L,R,red,blue,green\n    e.g. "80,-20,1,0,1"
+  The line looks like this:   L,R,red,blue,green,horn,gamepad\n
+                       e.g.   "80,-20,1,0,1,0,1"
   The first two numbers are PERCENT from -100 to 100 (minus = backwards),
-  then one 1 (on) or 0 (off) per light.
+  then one 1 (on) or 0 (off) per light, then the horn (1 while button Y is
+  held) and last whether a controller is connected (the ATOM Echo plays a
+  starter sound when that goes from 0 to 1).
 
   Why percent and not raw motor values? So the motor protection stays
   where it belongs: in the Arduino. The ESP32 only says "give it full
@@ -17,10 +20,14 @@
 
   WIRING (two wires, that is all):
     ESP32 GPIO13  ->  Arduino D0   (= RX of Serial1)
-    ESP32 GND     ->  Arduino GND
+    ESP32 GND     ->  Arduino GND  - a wire of its OWN, straight to a GND
+                                     pin of the Arduino
   The way back (Arduino D1 -> ESP32) is deliberately NOT wired: the
   Arduino would put 5 V on a pin that only tolerates 3.3 V. This direction
   is harmless, and measured: 0 errors in 250 lines.
+  Mind the ground wire: if it shares the breadboard rail with the motor
+  current, the line loses characters whenever the motors pull hard (we saw
+  33 mangled lines in 15 s of steering). A direct wire fixed it.
 
   POWER: give the ESP32 a supply of its own, a 5 V step-down converter off
   the battery into VIN. Do NOT feed it from the Arduino's 5 V pin - see
@@ -70,7 +77,7 @@ const unsigned long WIFI_WINDOW_MS     = 90000;   // 90 s, only used when true
 // THIS IS NOT DECORATION: an OTA upload can report success while the
 // board keeps booting the old half of the flash (see
 // docs/troubleshooting.md). The version line is the only honest proof.
-const char* VERSION = "1-public";
+const char* VERSION = "2-horn-and-starter";
 
 const char* WIFI_HOSTNAME = "lego4wd-gamepad";
 bool wifiReady = false;                 // OTA already started?
@@ -187,6 +194,17 @@ const char* LIGHT_NAME[LIGHT_COUNT] = { "red", "blue", "green" };  // for messag
 bool lightOn[LIGHT_COUNT]      = { false, false, false };  // what we send over
 bool buttonBefore[LIGHT_COUNT] = { false, false, false };  // was it pressed last time?
 
+// --- Horn ---
+// Unlike the lights this is NOT a toggle but a push button: it honks for as
+// long as Y is held, so no edge detection is needed. The field sits BEHIND
+// the lights - new fields always go at the end. The sound itself comes from
+// the ATOM Echo on the Arduino; the Arduino passes the horn on.
+bool horn = false;
+
+// Is a controller connected right now? Goes out as the last field - the
+// ATOM Echo plays the starter sound when it changes from 0 to 1.
+bool controllerConnected = false;
+
 void onConnect(ControllerPtr ctl) {
   for (int i = 0; i < BP32_MAX_GAMEPADS; i++) {
     if (controller[i] == nullptr) {
@@ -207,6 +225,8 @@ void onDisconnect(ControllerPtr ctl) {
       // Send a stop straight away. The Arduino would halt by itself after
       // 800 ms anyway, but immediately is better. The lights stay as they
       // were - light is not dangerous.
+      horn = false;
+      controllerConnected = false;
       sendDriveCommand(0, 0);
       return;
     }
@@ -282,6 +302,7 @@ void startOta() {
     // Switch the lights off too: the ESP32 is about to restart and will
     // come back up with everything off, so both sides stay in agreement.
     for (int i = 0; i < LIGHT_COUNT; i++) lightOn[i] = false;
+    horn = false;
     sendDriveCommand(0, 0);
 
     // Turn Bluetooth off BEFORE the new firmware is written. Two reasons:
@@ -372,12 +393,13 @@ int helpGoStraight(int sideways, int forward) {
   return sideways > 0 ? (int)stretched : -(int)stretched;
 }
 
-// Send one line "L,R,red,blue,green" to the Arduino. The lights live in a
-// global, so they do not have to be passed in.
+// Send one line "L,R,red,blue,green,horn,gamepad" to the Arduino. Lights,
+// horn and controller state live in globals, so they do not have to be
+// passed in.
 void sendDriveCommand(int l, int r) {
   Serial2.printf("%d,%d", l, r);
   for (int i = 0; i < LIGHT_COUNT; i++) Serial2.printf(",%d", lightOn[i] ? 1 : 0);
-  Serial2.print("\n");
+  Serial2.printf(",%d,%d\n", horn ? 1 : 0, controllerConnected ? 1 : 0);
 }
 
 // Work the LED. Called on every pass and uses millis() instead of
@@ -421,6 +443,11 @@ void loop() {
         buttonBefore[i] = button;
       }
 
+      // --- Horn: simply pass it on while Y is held.
+      bool y = ctl->y();
+      if (y != horn) Serial.printf("Horn %s\n", y ? "ON" : "off");
+      horn = y;
+
       // SKID STEER: the car has no steering wheel. It turns by running one
       // side faster than the other, like a digger. So we turn "throttle"
       // and "steering" into two side speeds.
@@ -456,9 +483,11 @@ void loop() {
   // after reconnecting registers as a fresh edge again.
   if (!haveController) {
     l = 0; r = 0;
+    horn = false;
     for (int i = 0; i < LIGHT_COUNT; i++) buttonBefore[i] = false;
   }
 
+  controllerConnected = haveController;
   tendLed(haveController);
 
   // Send at a steady rate whether anything changed or not: the constant

@@ -1,125 +1,48 @@
 # Next steps
 
-The car drives, lights up and takes a game controller. What it cannot do yet is make
-a sound — which, if you ask a four-year-old, is the only thing still missing.
+The car drives, lights up, takes a game controller — and since the sound stage it
+also honks, cranks its starter when the controller connects and beeps when it backs
+up. That part is built and written up in **[sound.md](sound.md)**.
 
-So the next stage is an **M5Stack ATOM Echo**: a 24 mm cube with a speaker, a
-microphone and an ESP32 in it. Engine noise, a horn, and eventually a car you can
-talk to. On top of that my daughter has asked for a **times-tables game**, which
-turns out to fit the same hardware remarkably well.
-
-None of the code below is built yet — treat it as a design sketch, not tested code.
+What follows is planned, not built. Treat the code in here as a design sketch.
+On top of that my daughter has asked for a **times-tables game**, which turns out to
+fit the hardware remarkably well.
 
 ## Pins still free
 
-Currently used: `D2`, `D4`, `D7`, `D8`, `D9`, `D10` (motors), `D3`, `D5`, `D6`
-(lights), `D0` (the line from the ESP32 gamepad bridge). `D13` is the on-board LED,
+In use: `D2`, `D4`, `D7`, `D8`, `D9`, `D10` (motors), `D3`, `D5`, `D6` (lights), `D0`
+(from the ESP32 gamepad bridge), `D1` (to the ATOM Echo). `D13` is the on-board LED,
 and the 12×8 LED matrix is internal (no pins).
 
-Free: `D1`, `D11`, `D12`, `A0`–`A5` (analog pins work as plain digital pins). `D11`
-is the only PWM pin still available.
-
-`D1` is the transmit half of `Serial1`. It has been deliberately unused so far — see
-the warning about 5 V in step 1.
+Free: `D11`, `D12`, `A0`–`A5` (analog pins work as plain digital pins). `D11` is the
+only PWM pin still available.
 
 ---
 
-## 1. Sound — an M5Stack ATOM Echo
+## 1. More sound
 
-**Why this part.** It is the smallest thing that has both a speaker and a microphone
-already wired to an ESP32, so there is nothing to solder and nothing to level-shift
-on the audio side. 24 × 24 × 17 mm and 9 g — it disappears into the LEGO.
+The ATOM Echo already gets everything it needs — the motor speeds arrive with every
+line — so most of this is firmware on the cube only.
 
-| | |
-|---|---|
-| SoC | ESP32-PICO-D4, dual core, 240 MHz, WiFi + Bluetooth |
-| Flash | 4 MB, **no PSRAM** |
-| Microphone | SPM1423, PDM |
-| Speaker | 0.8 W through an NS4168 I²S amplifier |
-| Also on board | SK6812 RGB LED (`G27`), one button (`G39`) |
-| Free pins | `G26` and `G32` on the Grove connector, plus 5 V and GND |
-| Reserved | `G19`, `G22`, `G23`, `G33` — the internal audio I²S bus |
-
-> ⚠️ **0.8 W is a small speaker.** It is plenty for a horn indoors and fine for engine
-> noise at walking pace, but it will not shout over a carpeted room full of children.
-> If that turns out to matter, the Grove port can drive a bigger amplifier later.
-
-### Wiring
-
-The car has to tell the Echo how fast it is going, 50 times a second, so the engine
-note can follow the throttle. That is one wire:
-
-| Arduino | | ATOM Echo |
-|---|---|---|
-| `D1` (TX of `Serial1`) | through a divider, see below | `G32` (Grove) |
-| `GND` | | `GND` (Grove) |
-| — | | 5 V from the same step-down converter as the ESP32 bridge |
-
-> ⚠️ **`D1` puts out 5 V and ESP32 pins tolerate 3.3 V.** This is exactly why `D1`
-> has been left unconnected up to now. Two resistors fix it — a divider of
-> **1 kΩ and 2 kΩ** brings 5 V down to 3.3 V:
->
-> ```
-> D1 ---[ 1k ]---+--- G32
->                |
->              [ 2k ]
->                |
->               GND
-> ```
->
-> The other direction (`D0`, ESP32 → Arduino) needs nothing, because 3.3 V is already
-> a valid HIGH for the Arduino. That asymmetry catches people out constantly.
-
-Note that `D0` is **not** available: the gamepad bridge already transmits on it, and
-two transmitters on one line do not work. The Echo therefore only listens.
-
-### What goes down the wire
-
-Reuse the format that already exists, just the other way round. The Arduino sends one
-line whenever something changes, plus a slow heartbeat:
-
-```
-L,R,horn      e.g.  "80,-20,0"
-```
-
-The Echo turns that into sound on its own:
-
-- **Engine note** from `(|L| + |R|) / 2` — a short looped sample played back at a rate
-  that scales with the speed. A single loop whose pitch bends is far more convincing
-  than a handful of separate samples, and it costs almost no flash.
-- **Standing still** = idle loop, quieter.
-- **Reversing** (both sides negative) = add a beeping reversing alarm. Free, and
-  children find it hilarious.
-- **Horn** on the bit, triggered from a controller button the same way the lights are.
-
-Storage: 4 MB of flash with no PSRAM. At 16 kHz, 16-bit mono you get roughly 30 s of
-audio per megabyte, so two or three megabytes of samples is a comfortable budget —
-far more than a horn and an engine loop need.
-
-### Code changes on the car
-
-Small. In `lego4wd.ino`, next to `showDirection()`:
-
-```cpp
-// Tell the sound board what the motors are doing. Same idea as the matrix
-// arrow: only send on a real change, plus a heartbeat so a lost line is
-// repaired within a fraction of a second.
-void sendSound(int left, int right) {
-  static int lastL = 0, lastR = 0;
-  static unsigned long lastBeat = 0;
-  if (left == lastL && right == lastR && millis() - lastBeat < 200) return;
-  lastL = left; lastR = right; lastBeat = millis();
-  Serial1.print(left); Serial1.print(','); Serial1.print(right);
-  Serial1.print(','); Serial1.println(hornOn ? 1 : 0);
-}
-```
-
-> ⚠️ **The dead man's switch has to silence the engine too.** `halt()` must send a
-> `0,0,0`. Otherwise a dropped connection leaves a car idling under the sofa forever.
+- **An engine note that follows the throttle.** The idle at the end of the starter
+  sound is already there; let its pitch rise with `(|L| + |R|) / 2`. A single loop
+  whose pitch bends is far more convincing than a handful of separate samples.
+  Expect it to be modest on the built-in speaker (see below).
+- **One-shot sounds** — a fanfare, a "wrong" buzzer, "battery low". Because the line
+  repeats every 200 ms, a sound number alone would restart the sound every 200 ms.
+  Send a **number plus a counter** that goes up by one per trigger; a new counter
+  value means "play it". Append both at the end of the line, as always.
+- **Louder.** The built-in speaker is the honest limit — a horn at full level is
+  still barely louder than the motors. A MAX98357A I²S amplifier (~€4) with a 3 W
+  speaker on the free Grove socket would be many times louder; only three pin
+  numbers in the firmware change.
+- **Updates over WiFi for the cube.** Right now every update means pulling the 5 V
+  wire and plugging in USB. The gamepad bridge shows how OTA works on an ESP32 —
+  including its traps (see [troubleshooting.md](troubleshooting.md)).
 
 > ⚠️ **Three radios now share one room.** The car does WiFi, the bridge does WiFi *and*
-> Bluetooth on one antenna, and the Echo adds a third. If the controller starts
-> lagging once the Echo is in, that is where to look first — the bridge sketch already
+> Bluetooth on one antenna, and the ATOM adds a third as soon as it gets OTA. If the
+> controller starts lagging, that is where to look first — the bridge sketch already
 > has a `WIFI_ONLY_AT_START` switch for exactly this.
 
 ---
@@ -129,7 +52,7 @@ void sendSound(int left, int right) {
 This is the part where it pays to be honest about what a small chip can do, because
 the marketing does not make the distinction.
 
-**Wake word detection on the Echo: yes.** Espressif's WakeNet runs on a plain ESP32
+**Wake word detection on the ATOM Echo: yes.** Espressif's WakeNet runs on a plain ESP32
 and spots one fixed phrase ("Hi, ESP") reliably. That alone is enough for a push-free
 "listen now".
 
@@ -179,8 +102,10 @@ question logic and a handful of samples.
 
 **Where should the logic live?** On the **Echo**, not the Arduino. It has the speaker,
 it has the flash for samples, and the Arduino's job — motors, safety, the dead man's
-switch — should stay as boring and as small as it is. The Echo already talks HTTP to
-the car for step 2, so the same route works here.
+switch — should stay as boring and as small as it is. The Echo already hears the car
+over its wire; to put the question on the matrix it has to talk back, and HTTP to the
+car's endpoints (once the cube has WiFi, see step 1) is the easy route — the same one
+the speech path in step 2 would use.
 
 **How does it know which card she drove onto?** Cheapest honest answer: it does not —
 the child presses A when she is there and a grown-up is the referee. Step two would be
