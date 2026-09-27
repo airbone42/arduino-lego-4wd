@@ -25,6 +25,7 @@ soldered permanently to the LEGO, so the bricks survive the project.
 | — | Rubber bands | Poor man's tyres. Slip them over the wheels for grip on hard floors. |
 | 1 | **USB game controller** | Optional second way to drive — anything the browser Gamepad API sees. We use a GameSir T4 Pro; an Xbox or PlayStation pad works the same. |
 | 3 | **LEDs** (red, blue, green) + resistors | Lights on the controller buttons. 1 kΩ each, except green which wants ~500 Ω — see [wiring.md](wiring.md) for why, and why **not** the 220 Ω every tutorial tells you. |
+| 1 | **RGB LED**, 4 legs, common cathode + resistors **2× 1 kΩ** and **2× 330 Ω** | Any colour from the right stick. Two 1 kΩ side by side (~500 Ω) on red, 330 Ω on green and blue — see [wiring.md](wiring.md#rgb-led-optional). A common-anode one works too (one setting in the sketch); the multimeter tells you which you have. |
 
 **For the controller straight on the car (no laptop)**
 

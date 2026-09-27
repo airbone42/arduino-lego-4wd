@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 1000" width="1120" height="1000" font-family="Segoe UI, Helvetica, Arial, sans-serif">
-  <rect x="0" y="0" width="1120" height="1000" fill="#ffffff"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 1210" width="1120" height="1210" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <rect x="0" y="0" width="1120" height="1210" fill="#ffffff"/>
 
   <style>
     .box    { fill:#f7f8fa; stroke:#334; stroke-width:2; }
@@ -159,8 +159,8 @@
   <!-- ============================================================ -->
   <!-- OPTIONAL ADD=ONS                                             -->
   <!-- Drawn as their own panels rather than as long wires across   -->
-  <!-- the whole sheet: both hang off pins that are otherwise free, -->
-  <!-- and neither changes anything above.                          -->
+  <!-- the whole sheet: all hang off pins that are otherwise free,  -->
+  <!-- and none of them changes anything above.                     -->
   <!-- ============================================================ -->
   <line x1="30" y1="676" x2="1090" y2="676" stroke="#ccd" stroke-width="1.5" stroke-dasharray="6 5"/>
   <text x="30" y="668" class="note" font-weight="600">Everything below is optional &#8212; the car drives without it. Add one at a time.</text>
@@ -240,16 +240,67 @@
   <path d="M790,844 H866" class="w wsig"/>
   <text x="874" y="848" class="pin" fill="#1a6fd4" font-weight="600">&#8594; Arduino D0</text>
   <path d="M790,866 H866" class="w wgnd"/>
-  <text x="874" y="870" class="pin" fill="#333" font-weight="600">&#8594; GND rail</text>
+  <text x="874" y="870" class="pin" fill="#333" font-weight="600">&#8594; Arduino GND pin</text>
 
   <text x="600" y="900" class="note" fill="#a12" font-weight="600">&#9888; Do NOT wire Arduino D1 back to the ESP32 &#8212; that pin drives 5 V into a</text>
   <text x="600" y="916" class="note" fill="#a12">3.3 V input. The other direction is fine, which is why only D0 is used.</text>
   <text x="600" y="932" class="note" fill="#a12" font-weight="600">&#9888; Once VIN is connected, never plug in USB as well.</text>
 
-  <text x="30" y="972" class="note">
+  <!-- ========== RGB LED ========== -->
+  <rect x="30" y="958" width="1060" height="200" rx="8" fill="#fafbfc" stroke="#aab" stroke-width="1.5" stroke-dasharray="7 4"/>
+  <circle cx="53" cy="984" r="11" fill="#7a8899"/>
+  <text x="53" y="989" font-size="12" font-weight="700" fill="#fff" text-anchor="middle">4</text>
+  <text x="72" y="990" class="name">RGB LED &#8212; any colour from the right stick</text>
+  <text x="50" y="1012" class="note">Three LEDs in one case, sharing the longest leg. Stick up/down = brighter/dimmer, left/right = through the rainbow.</text>
+
+  <!-- row 1: red leg on D11 -->
+  <rect x="50" y="1025" width="52" height="26" rx="5" fill="#eef2f8" stroke="#1a6fd4" stroke-width="1.5"/>
+  <text x="76" y="1043" class="pin" text-anchor="middle" font-weight="700">D11</text>
+  <line x1="102" y1="1038" x2="140" y2="1038" class="w wsig"/>
+  <rect x="140" y="1026" width="96" height="24" rx="6" fill="#f3ead4" stroke="#b79f6a"/>
+  <text x="188" y="1043" class="pin" text-anchor="middle">2&#215; 1 k&#8486; &#8741;</text>
+  <line x1="236" y1="1038" x2="300" y2="1038" class="w wsig"/>
+
+  <!-- row 2: green leg on D12 -->
+  <rect x="50" y="1065" width="52" height="26" rx="5" fill="#eef2f8" stroke="#1a6fd4" stroke-width="1.5"/>
+  <text x="76" y="1083" class="pin" text-anchor="middle" font-weight="700">D12</text>
+  <line x1="102" y1="1078" x2="140" y2="1078" class="w wsig"/>
+  <rect x="140" y="1066" width="96" height="24" rx="6" fill="#f3ead4" stroke="#b79f6a"/>
+  <text x="188" y="1083" class="pin" text-anchor="middle">330 &#8486;</text>
+  <line x1="236" y1="1078" x2="300" y2="1078" class="w wsig"/>
+
+  <!-- row 3: blue leg on A4 -->
+  <rect x="50" y="1105" width="52" height="26" rx="5" fill="#eef2f8" stroke="#1a6fd4" stroke-width="1.5"/>
+  <text x="76" y="1123" class="pin" text-anchor="middle" font-weight="700">A4</text>
+  <line x1="102" y1="1118" x2="140" y2="1118" class="w wsig"/>
+  <rect x="140" y="1106" width="96" height="24" rx="6" fill="#f3ead4" stroke="#b79f6a"/>
+  <text x="188" y="1123" class="pin" text-anchor="middle">330 &#8486;</text>
+  <line x1="236" y1="1118" x2="300" y2="1118" class="w wsig"/>
+
+  <!-- the LED: one case, three colours inside -->
+  <rect x="300" y="1022" width="60" height="112" rx="28" fill="#f4f5f8" stroke="#556" stroke-width="2"/>
+  <circle cx="330" cy="1038" r="10" fill="#f0463a" stroke="#b3271d" stroke-width="1.5"/>
+  <circle cx="330" cy="1078" r="10" fill="#35b35a" stroke="#1f7a3a" stroke-width="1.5"/>
+  <circle cx="330" cy="1118" r="10" fill="#3a7bf0" stroke="#1d4e91" stroke-width="1.5"/>
+
+  <!-- common leg (cathode) to ground -->
+  <path d="M360,1078 H440 V1100" class="w wgnd"/>
+  <path d="M428,1106 H452 M432,1112 H448 M436,1118 H444" class="w wgnd" stroke-width="2"/>
+  <text x="372" y="1070" class="pin" fill="#333" font-size="10">longest leg</text>
+  <text x="460" y="1082" class="pin" fill="#333" font-size="10">&#8594; GND</text>
+
+  <text x="580" y="1036" class="note">Dimming needs PWM pins &#8212; D11, D12 and A4 were the last free ones.</text>
+  <text x="580" y="1052" class="note">Red: two 1 k&#8486; side by side (~500 &#8486;, ~6 mA). 330 &#8486; would be ~9 mA: too much.</text>
+  <text x="580" y="1076" class="note" font-weight="600">Check it first &#8212; multimeter on diode test:</text>
+  <text x="580" y="1092" class="note">black probe on the longest leg, red on each of the others &#8212; each</text>
+  <text x="580" y="1108" class="note">colour glows faintly. A display showing &#8220;1&#8221; is over range, not broken.</text>
+  <text x="580" y="1132" class="note" fill="#a12" font-weight="600">&#9888; Glows only the other way round? Common anode: longest leg to</text>
+  <text x="580" y="1148" class="note" fill="#a12">the 5V pin, NOT the V+ rail (9.6 V) &#8212; and set RGB_COMMON_ANODE = true.</text>
+
+  <text x="30" y="1188" class="note">
     <tspan fill="#d62828" font-weight="700">&#9679;</tspan> junction &#8212; wires crossing without a dot are <tspan font-weight="700">not</tspan> connected.
   </text>
-  <text x="470" y="972" class="note">
+  <text x="470" y="1188" class="note">
     <tspan fill="#d62828">&#9644;</tspan> battery +   <tspan fill="#333333">&#9644;</tspan> ground   <tspan fill="#e07b00">&#9644;</tspan> 5 V logic   <tspan fill="#1a6fd4">&#9644;</tspan> control signals   <tspan fill="#7b3fa0">&#9644;</tspan> motor output
   </text>
 </svg>

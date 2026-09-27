@@ -2,21 +2,35 @@
   Gamepad bridge - ESP32 + Bluepad32
   ============================================================
   This is the piece that cuts the laptop out of the loop. The ESP32 rides
-  on the car, talks Bluetooth to a game controller, works out how fast the
-  left and the right side should run, and sends that to the Arduino as a
-  short text line over a single wire.
+  on the car, listens to a game controller over Bluetooth, and sends
+  EVERYTHING it knows about it to the Arduino as a short text line over a
+  single wire - without deciding anything itself.
 
-  The line looks like this:   L,R,red,blue,green,horn,gamepad\n
-                       e.g.   "80,-20,1,0,1,0,1"
-  The first two numbers are PERCENT from -100 to 100 (minus = backwards),
-  then one 1 (on) or 0 (off) per light, then the horn (1 while button Y is
-  held) and last whether a controller is connected (the ATOM Echo plays a
-  starter sound when that goes from 0 to 1).
+  It used to do the thinking too (skid-steer mixing, light switches,
+  horn ...). That meant every new idea needed TWO boards updated, and the
+  ESP32 is the moody one of the two when updating over WiFi (see
+  docs/troubleshooting.md). Now it is just an "extension cord" for the
+  controller: new buttons, new lights, new sounds - all of that happens in
+  the Arduino sketch (firmware/lego4wd). This sketch should never need
+  touching again.
 
-  Why percent and not raw motor values? So the motor protection stays
-  where it belongs: in the Arduino. The ESP32 only says "give it full
-  throttle" - how much full throttle is, the Arduino decides (SPEED_MAX).
-  Exactly like the browser control does through /drive?l=..&r=..
+  The line looks like this:
+      connected,lx,ly,rx,ry,throttle,brake,buttons,dpad,misc*CS\n
+  e.g.  "1,0,-400,120,0,0,0,2,0,0*05"
+    connected       1 = controller there, 0 = none (then all the rest is 0)
+    lx,ly           left stick,  -512..512 (y: MINUS = forward, like on a
+                    screen, where up counts downwards)
+    rx,ry           right stick, -512..512
+    throttle,brake  ZR/ZL analog 0..1023 - always 0 in Switch mode, where
+                    those two are plain buttons (they show up in "buttons")
+    buttons         one bit per button:  A=1 B=2 X=4 Y=8 LB=16 RB=32
+                    LT=64 RT=128, left stick pressed=256, right=512.
+                    So "B + Y" held together = 2 + 8 = 10.
+    dpad            up=1 down=2 right=4 left=8
+    misc            HOME=1 minus=2 plus=4 capture=8
+    *CS             checksum, two hex digits (see checksum())
+
+  Should a new field ever be needed, it goes at the END (before the *).
 
   WIRING (two wires, that is all):
     ESP32 GPIO13  ->  Arduino D0   (= RX of Serial1)
@@ -27,7 +41,9 @@
   is harmless, and measured: 0 errors in 250 lines.
   Mind the ground wire: if it shares the breadboard rail with the motor
   current, the line loses characters whenever the motors pull hard (we saw
-  33 mangled lines in 15 s of steering). A direct wire fixed it.
+  33 mangled lines in 15 s of steering). A direct wire fixed it, and the
+  checksum makes sure the odd mangled line that still slips through is
+  thrown away instead of obeyed.
 
   POWER: give the ESP32 a supply of its own, a 5 V step-down converter off
   the battery into VIN. Do NOT feed it from the Arduino's 5 V pin - see
@@ -77,7 +93,9 @@ const unsigned long WIFI_WINDOW_MS     = 90000;   // 90 s, only used when true
 // THIS IS NOT DECORATION: an OTA upload can report success while the
 // board keeps booting the old half of the flash (see
 // docs/troubleshooting.md). The version line is the only honest proof.
-const char* VERSION = "2-horn-and-starter";
+// From the outside the quickest check is the Arduino's http://<car>/status:
+// if the "last=" line ends in a "*" plus checksum, this build is running.
+const char* VERSION = "20-gamepad-raw";
 
 const char* WIFI_HOSTNAME = "lego4wd-gamepad";
 bool wifiReady = false;                 // OTA already started?
@@ -110,7 +128,8 @@ bool          blinkOn   = false;
 //    pin "does nothing", this is the first suspect.
 //  * GPIO12 is a strapping pin: at power-up it sets the flash voltage,
 //    and if it is HIGH the board does not boot. An idle TX line sits
-//    exactly at HIGH.
+//    exactly at HIGH. (Its neighbour GPIO14 twitches during boot, so the
+//    Arduino would get garbage on D0 every time the ESP32 restarts.)
 //  * GPIO34/35, VP and VN can only be INPUTS. As a transmit pin they
 //    simply do nothing, and you cannot tell by looking.
 //
@@ -121,89 +140,16 @@ bool          blinkOn   = false;
 const int  PIN_TX = 13;      // GPIO13, marked "D13" on the board
 const long BAUD   = 38400;
 // Why 38400 and not faster? We measured 9600 and 115200, both without a
-// single error. 38400 sits comfortably in between: the line is only 16 %
-// busy, and every single bit lasts three times longer than at 115200 -
-// margin against the electrical noise the motors make.
-
-// --- Sticks ---
-// Bluepad32 gives us -512 .. 512 per axis.
-const int STICK_MAX = 512;
-
-// DEAD ZONE: at rest the sticks do NOT sit exactly at 0 - we measured up
-// to 41 off. Without a dead zone the car would drive off on its own.
-// Anything below this counts as "stick released".
-const int DEAD_ZONE = 80;
-
-// --- STRAIGHT-AHEAD HELP ---
-// The problem: the car only drove straight when the thumb pushed the
-// stick EXACTLY forward. One degree off and one side already ran slower.
-// A four-year-old cannot hit that. Neither can an adult, really.
-//
-// The fix is a wedge around the vertical: if the stick sits less than
-// STRAIGHT_DEGREES away from "fully forward", that counts as straight and
-// the steering is simply set to 0. Backwards works the same, because we
-// only ever compare magnitudes.
-//
-// Why an ANGLE and not just "throw away small steering values"? Because a
-// fixed number would be the same width at every speed - creeping along
-// slowly, you could not steer at all any more. The wedge grows with the
-// throttle: lots of throttle means a wide wedge in numbers, little
-// throttle a narrow one. Under the thumb it always feels the same.
-//
-// One number to tune. More slack = bigger (20, 25), sharper steering =
-// smaller (10). Above ~30 degrees steering gets sluggish.
-const int   STRAIGHT_DEGREES = 15;
-// tan() turns the angle into a ratio of sides: at 15 degrees the sideways
-// deflection may be up to 27 % of the forward deflection and still count
-// as straight ahead.
-const float STRAIGHT_TAN = tanf(STRAIGHT_DEGREES * 3.14159265f / 180.0f);
+// single error. 38400 sits comfortably in between, and every single bit
+// lasts three times longer than at 115200 - margin against the electrical
+// noise the motors make. The longest line is about 50 characters; at 50
+// lines a second that keeps the wire at most two thirds busy.
 
 // One line every 20 ms = 50 per second. The Arduino stops by itself when
 // nothing arrives for 800 ms (dead man's switch), so there is plenty of
 // slack if a line is lost.
 const unsigned long SEND_INTERVAL_MS = 20;
 unsigned long lastSend = 0;
-
-// Last values sent - so the serial monitor only prints on a real change
-// instead of 50 lines per second.
-int lastL = 0, lastR = 0;
-
-// --- Lights on buttons ---
-// Each light behaves like a light switch: press once = on, press again =
-// off. The ORDER has to match the lights[] table in the Arduino sketch -
-// we only send numbers down the wire, no names.
-const int LIGHT_COUNT = 3;
-
-// Which button switches which light?
-//
-// MIND THE BUTTON NAMES: our controller reports itself as a "Switch Pro",
-// and on Nintendo pads A/B and X/Y sit the other way round than on Xbox.
-// So Bluepad32 may well call your buttons something else. If the wrong
-// button switches, THIS FUNCTION is the only place to touch - just try
-// a() / b() / x() / y() until it fits.
-bool buttonForLight(ControllerPtr ctl, int i) {
-  switch (i) {
-    case 0: return ctl->b();   // red LED   on D3
-    case 1: return ctl->x();   // blue LED  on D5
-    case 2: return ctl->a();   // green LED on D6
-  }
-  return false;
-}
-
-const char* LIGHT_NAME[LIGHT_COUNT] = { "red", "blue", "green" };  // for messages
-bool lightOn[LIGHT_COUNT]      = { false, false, false };  // what we send over
-bool buttonBefore[LIGHT_COUNT] = { false, false, false };  // was it pressed last time?
-
-// --- Horn ---
-// Unlike the lights this is NOT a toggle but a push button: it honks for as
-// long as Y is held, so no edge detection is needed. The field sits BEHIND
-// the lights - new fields always go at the end. The sound itself comes from
-// the ATOM Echo on the Arduino; the Arduino passes the horn on.
-bool horn = false;
-
-// Is a controller connected right now? Goes out as the last field - the
-// ATOM Echo plays the starter sound when it changes from 0 to 1.
-bool controllerConnected = false;
 
 void onConnect(ControllerPtr ctl) {
   for (int i = 0; i < BP32_MAX_GAMEPADS; i++) {
@@ -222,12 +168,9 @@ void onDisconnect(ControllerPtr ctl) {
     if (controller[i] == ctl) {
       controller[i] = nullptr;
       Serial.println("Controller gone -- stop the car.");
-      // Send a stop straight away. The Arduino would halt by itself after
-      // 800 ms anyway, but immediately is better. The lights stay as they
-      // were - light is not dangerous.
-      horn = false;
-      controllerConnected = false;
-      sendDriveCommand(0, 0);
+      // Send a "nothing pressed" line straight away. The Arduino would
+      // halt by itself after 800 ms anyway, but immediately is better.
+      sendEmpty();
       return;
     }
   }
@@ -299,11 +242,7 @@ void startOta() {
   // Nothing else runs here during an upload - without this stop it would
   // simply keep driving on the last command.
   ArduinoOTA.onStart([]() {
-    // Switch the lights off too: the ESP32 is about to restart and will
-    // come back up with everything off, so both sides stay in agreement.
-    for (int i = 0; i < LIGHT_COUNT; i++) lightOn[i] = false;
-    horn = false;
-    sendDriveCommand(0, 0);
+    sendEmpty();
 
     // Turn Bluetooth off BEFORE the new firmware is written. Two reasons:
     //  1. After an OTA update the ESP32 only does a SOFTWARE restart, not
@@ -360,46 +299,46 @@ void tendWifi() {
   }
 }
 
-// Turn a stick value (-512..512) into percent (-100..100), dead zone included.
-int stickToPercent(int value) {
-  if (abs(value) < DEAD_ZONE) return 0;
-
-  // Subtract the dead zone FIRST, then scale up. Otherwise there would be
-  // a jump at the edge of the dead zone: the slightest movement would set
-  // off at 15 % instead of pulling away gently.
-  long amount  = (long)abs(value) - DEAD_ZONE;
-  long percent = amount * 100 / (STICK_MAX - DEAD_ZONE);
-  if (percent > 100) percent = 100;
-  return value > 0 ? (int)percent : -(int)percent;
+// --- CHECKSUM ---
+// When the car steers, the motors disturb the wire and characters get
+// lost (we measured 33 mangled lines in 15 s). So that the Arduino can
+// tell a broken line apart from a good one for SURE, we add a checksum -
+// the same trick GPS receivers use in their NMEA sentences.
+// The recipe: combine every character of the line, one after the other,
+// with XOR ("one or the other, but not both"). The result is a number
+// from 0 to 255, which we write as two hex digits after a "*". The Arduino
+// does the same sum on what it received - if a character went missing or
+// got garbled, a different number comes out and the line is thrown away.
+uint8_t checksum(const char* text) {
+  uint8_t sum = 0;
+  while (*text) sum ^= (uint8_t)*text++;
+  return sum;
 }
 
-// Is the stick nearly straight ahead? Then drop the steering entirely.
-// Computed on the RAW stick values, before the conversion to percent -
-// that is the only place where the geometry holds and 15 degrees really
-// are 15 degrees. (The dead zone below then trims a little more off, so
-// the wedge ends up slightly wider than 15 degrees in practice. For us
-// that is the right direction.)
-int helpGoStraight(int sideways, int forward) {
-  int slack = (int)(abs(forward) * STRAIGHT_TAN);
-  if (abs(sideways) <= slack) return 0;
-
-  // Do not just cut it off! That would put a jump right at the edge of
-  // the wedge: a hair too far and the steering leaps from 0 to 27 %.
-  // Instead subtract the slack and stretch what is left back to full
-  // width - the steering then grows smoothly out of zero, and full
-  // deflection still steers fully. Same trick as the dead zone.
-  long rest      = (long)abs(sideways) - slack;
-  long stretched = rest * STICK_MAX / (STICK_MAX - slack);
-  return sideways > 0 ? (int)stretched : -(int)stretched;
+// Send a finished line, checksum included. In ONE print(), so it does not
+// go down the wire in pieces.
+void sendLine(const char* content) {
+  char line[80];
+  snprintf(line, sizeof(line), "%s*%02X\n", content, checksum(content));
+  Serial2.print(line);
 }
 
-// Send one line "L,R,red,blue,green,horn,gamepad" to the Arduino. Lights,
-// horn and controller state live in globals, so they do not have to be
-// passed in.
-void sendDriveCommand(int l, int r) {
-  Serial2.printf("%d,%d", l, r);
-  for (int i = 0; i < LIGHT_COUNT; i++) Serial2.printf(",%d", lightOn[i] ? 1 : 0);
-  Serial2.printf(",%d,%d\n", horn ? 1 : 0, controllerConnected ? 1 : 0);
+// "No controller, nothing pressed" - this stops the car.
+void sendEmpty() {
+  sendLine("0,0,0,0,0,0,0,0,0,0");
+}
+
+// The whole state of the controller as one line. NOTHING is converted
+// here - what the car makes of it is decided by the Arduino alone.
+void sendGamepad(ControllerPtr ctl) {
+  char content[72];
+  snprintf(content, sizeof(content), "1,%ld,%ld,%ld,%ld,%ld,%ld,%u,%u,%u",
+           (long)ctl->axisX(),  (long)ctl->axisY(),
+           (long)ctl->axisRX(), (long)ctl->axisRY(),
+           (long)ctl->throttle(), (long)ctl->brake(),
+           (unsigned)ctl->buttons(), (unsigned)ctl->dpad(),
+           (unsigned)ctl->miscButtons());
+  sendLine(content);
 }
 
 // Work the LED. Called on every pass and uses millis() instead of
@@ -424,81 +363,18 @@ void loop() {
   BP32.update();
   tendWifi();
 
-  int l = 0, r = 0;
-  bool haveController = false;
-
+  // Find the first connected controller - we only use one.
+  ControllerPtr active = nullptr;
   for (auto ctl : controller) {
-    if (ctl && ctl->isConnected() && ctl->isGamepad()) {
-      haveController = true;
-
-      // --- Lights: only the EDGE counts, the change from "released" to
-      // "pressed". Without that check a light would toggle 50 times a
-      // second for as long as a finger rests on the button.
-      for (int i = 0; i < LIGHT_COUNT; i++) {
-        bool button = buttonForLight(ctl, i);
-        if (button && !buttonBefore[i]) {
-          lightOn[i] = !lightOn[i];
-          Serial.printf("Light %s %s\n", LIGHT_NAME[i], lightOn[i] ? "ON" : "off");
-        }
-        buttonBefore[i] = button;
-      }
-
-      // --- Horn: simply pass it on while Y is held.
-      bool y = ctl->y();
-      if (y != horn) Serial.printf("Horn %s\n", y ? "ON" : "off");
-      horn = y;
-
-      // SKID STEER: the car has no steering wheel. It turns by running one
-      // side faster than the other, like a digger. So we turn "throttle"
-      // and "steering" into two side speeds.
-      //
-      // The minus on the throttle: the y axis counts like a screen, up is
-      // MINUS. Pushing the stick forward gives -400, but we want "forward".
-      int rawForward  = -ctl->axisY();
-      int rawSideways =  ctl->axisX();
-
-      // Nearly straight? Then perfectly straight (see STRAIGHT_DEGREES).
-      rawSideways = helpGoStraight(rawSideways, rawForward);
-
-      int throttle = stickToPercent(rawForward);
-      int steering = stickToPercent(rawSideways);
-
-      l = throttle + steering;
-      r = throttle - steering;
-
-      // At full throttle AND full steering this would come to 200. Rather
-      // than simply clipping at 100 we scale both sides down by the same
-      // ratio - otherwise the car would suddenly steer less at full
-      // throttle than at half throttle.
-      int biggest = max(abs(l), abs(r));
-      if (biggest > 100) {
-        l = l * 100 / biggest;
-        r = r * 100 / biggest;
-      }
-      break;   // we only use the first controller
-    }
+    if (ctl && ctl->isConnected() && ctl->isGamepad()) { active = ctl; break; }
   }
-
-  // No controller? Then every button counts as released, so the next press
-  // after reconnecting registers as a fresh edge again.
-  if (!haveController) {
-    l = 0; r = 0;
-    horn = false;
-    for (int i = 0; i < LIGHT_COUNT; i++) buttonBefore[i] = false;
-  }
-
-  controllerConnected = haveController;
-  tendLed(haveController);
+  tendLed(active != nullptr);
 
   // Send at a steady rate whether anything changed or not: the constant
   // ticking is what keeps the dead man's switch in the Arduino awake.
   if (millis() - lastSend >= SEND_INTERVAL_MS) {
     lastSend = millis();
-    sendDriveCommand(l, r);
-
-    if (l != lastL || r != lastR) {
-      lastL = l; lastR = r;
-      Serial.printf("left=%4d %%   right=%4d %%\n", l, r);
-    }
+    if (active) sendGamepad(active);
+    else        sendEmpty();
   }
 }

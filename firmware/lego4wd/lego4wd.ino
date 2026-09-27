@@ -20,11 +20,23 @@
   NOTE: the very first upload must go over USB, and if you ever flash
   a build that cannot join the WiFi, only the cable will save you.
 
+  CONTROLLER: a Bluetooth game controller can also drive the car directly,
+  through an ESP32 on D0 (firmware/esp32-gamepad/). The ESP32 only
+  reports - sticks and buttons arrive RAW, and everything they do on the
+  car is decided HERE: dead zone, steering, which button switches which
+  light. So a new button idea only needs this sketch updated; the ESP32
+  stays as it is. See "What comes from the controller" below.
+
   LIGHTS: three LEDs can be switched from the controller buttons -
   red on D3 (button B), blue on D5 (button X), green on D6 (button A).
   See "Lights" below for how to wire them. To try them without a
   controller, just open these in a browser:
       http://<car>/lights?red=1&blue=1&green=1
+
+  RGB LED: one LED that can do any colour, on D11/D12/A4. The RIGHT stick
+  sets it: up/down = brightness (all the way down = off), left/right =
+  turn through the rainbow. Without a controller:
+      http://<car>/lights?bright=100&hue=120     (120 = green)
 
   SOUND: an M5Stack ATOM Echo on D1 plays the horn (button Y), a starter
   motor when the controller connects and a reversing beeper. The car only
@@ -207,6 +219,31 @@ const int SPEED_MIN = 70;
 // wheels simply stalled on our floor.
 const int TURN_INNER_SPEED = -70;
 
+// --- The buttons on the controller ---
+// The ESP32 sends all buttons as ONE number, one bit per button (that is
+// how Bluepad32 counts): A=1, B=2, X=4, Y=8 ... "B and Y together" = 2+8 = 10.
+// MIND THE NAMES: our controller reports itself as a "Switch Pro", and on
+// Nintendo pads A/B and X/Y sit the other way round compared to Xbox. If the
+// wrong button does something, just put a different BUTTON_... into the
+// table below.
+const uint16_t BUTTON_A  = 1,   BUTTON_B  = 2,   BUTTON_X  = 4,   BUTTON_Y  = 8;
+const uint16_t BUTTON_LB = 16,  BUTTON_RB = 32,  BUTTON_LT = 64,  BUTTON_RT = 128;
+const uint16_t BUTTON_STICK_L = 256, BUTTON_STICK_R = 512;   // stick pushed in
+const uint8_t  DPAD_UP = 1, DPAD_DOWN = 2, DPAD_RIGHT = 4, DPAD_LEFT = 8;
+
+const uint16_t BUTTON_HORN = BUTTON_Y;
+
+// Everything the controller reports, unpacked from the ESP32's line.
+struct Gamepad {
+  bool     connected;
+  int      lx, ly, rx, ry;    // sticks, -512..512 (y: MINUS = forward)
+  int      throttle, brake;   // ZR/ZL analog 0..1023, always 0 in Switch mode
+  uint16_t buttons;           // one bit per button, see BUTTON_...
+  uint8_t  dpad;              // the D-pad, see DPAD_...
+  uint8_t  misc;              // HOME=1, minus=2, plus=4, capture=8
+};
+Gamepad gp = {};   // what counts right now (filled in by handleGamepadLine)
+
 // --- Lights ---
 // Three LEDs, each with its own button. Three parts per LED, no soldering:
 //
@@ -265,26 +302,157 @@ const int TURN_INNER_SPEED = -70;
 // built in. So the button can be checked before a single LED is plugged
 // in, and later, on battery power, it is the simplest proof that the
 // command arrives at all.
+//
+// Every light is one row in this table: the name it goes by in requests
+// (?red=1), its pin, its button on the controller, and whether it is on
+// right now. Another light needs just one more row here. Nothing else --
+// not even an ESP32 update.
 struct Light {
   const char* name;   // the name used in requests, e.g. ?red=1
   int         pin;
+  uint16_t    button; // which controller button switches it, see BUTTON_...
   bool        on;
 };
 
 Light lights[] = {
-  { "red",   3, false },  // red LED   -- button B on the controller
-  { "blue",  5, false },  // blue LED  -- button X
-  { "green", 6, false },  // green LED -- button A
+  { "red",   3, BUTTON_B, false },  // red LED
+  { "blue",  5, BUTTON_X, false },  // blue LED
+  { "green", 6, BUTTON_A, false },  // green LED
 };
 const int LIGHT_COUNT = sizeof(lights) / sizeof(lights[0]);
 
-// Still free for more lights: D11, D12 and A0..A5.
-// In use: D2/D4/D7/D8/D9/D10 (motors), D3/D5/D6 (these LEDs).
+// Still free for more lights: A0..A3 and A5 (A1 is a good spot for a
+// battery monitor, see docs/next-steps.md). On/off only -- of these, only
+// A5 can still dim, and it shares its timer with A4 (RGB blue).
+// In use: D0/D1 (ESP32/ATOM), D2/D4/D7/D8/D9/D10 (motors),
+// D3/D5/D6 (these LEDs), D11/D12/A4 (RGB LED).
+
+// --- RGB LED ---
+// An RGB LED is really THREE LEDs in one case -- red, green, blue -- that
+// share one leg (the longest). Each colour has its own pin and its own
+// resistor:
+//
+//     D11 ---[ 2x 1 kOhm side by side = 500 Ohm ]---  RED leg
+//     D12 ---[ 330 Ohm ]---  GREEN leg
+//     A4  ---[ 330 Ohm ]---  BLUE leg
+//     GND -----------------  LONG leg (common cathode)
+//
+// Why a bigger resistor on red? Red eats only ~2 V itself, green and blue
+// ~3 V. With 330 Ohm too much would be left over for red: ~9 mA, and a pin
+// may only give 8 mA (see the table under "Lights" above).
+// A single 1 kOhm (~3 mA) left red far too weak next to green and blue --
+// the rainbow was mostly green. Two 1 kOhm side by side = 500 Ohm give
+// ~6 mA: twice as bright and still safe.
+//
+// Why exactly these pins? We want to DIM, not just switch on and off. Only
+// a PWM pin can do that: it switches on and off so fast (500 times a
+// second) that the eye only sees the average -- on half the time = half as
+// bright. And from three colours the eye mixes all the others: red + green
+// = yellow, green + blue = turquoise, all three = white. Just like a TV.
+// D11, D12 and A4 were the only free pins left that can do PWM.
+const int RGB_PIN_RED   = 11;
+const int RGB_PIN_GREEN = 12;
+const int RGB_PIN_BLUE  = A4;
+
+// There are two kinds, and you cannot tell them apart by looking:
+//   common CATHODE -> long leg to GND,  pin HIGH = colour on (the usual one)
+//   common ANODE   -> long leg to 5V,   pin LOW  = colour on
+// Find out with the multimeter (diode test): black probe on the long leg,
+// red on another one -- if it glows, it is a cathode. If the LED shines
+// bright white while it should be off, this value is the wrong way round.
+const bool RGB_COMMON_ANODE = false;
+
+// The three colours are not equally bright (different resistors, different
+// chips). If "yellow" looks rather greenish, turn green down here until
+// yellow is yellow. The kids judge that best by eye. 0..255.
+const int RGB_GAIN_RED   = 255;
+const int RGB_GAIN_GREEN = 255;
+const int RGB_GAIN_BLUE  = 255;
+
+// How fast the stick acts at FULL deflection. Half-way it goes half as
+// fast -- so you can turn roughly first and then fine-tune.
+const float RAINBOW_SECONDS    = 4.0f;   // once all the way round the colours
+const float BRIGHTNESS_SECONDS = 2.0f;   // from off to fully bright
+
+// The state. The rainbow is a CIRCLE of 360 degrees:
+//   0 = red, 60 = yellow, 120 = green, 180 = turquoise, 240 = blue,
+//   300 = purple, and 360 is red again. That is why you can keep turning
+//   in one direction forever.
+float rgbHue        = 0;     // 0..360 degrees
+float rgbBrightness = 0;     // 0..100 %, 0 = off. It starts off.
+int   rgbStickX     = 0;     // right stick, -100..100 (see applyGamepad)
+int   rgbStickY     = 0;
 
 // Is any light on? The built-in "L" LED follows this.
 bool anyLightOn() {
   for (int i = 0; i < LIGHT_COUNT; i++) if (lights[i].on) return true;
-  return false;
+  return rgbBrightness > 0;
+}
+
+// Turn hue + brightness into three pin values and write them out.
+// The colour circle is cut into six slices of 60 degrees. In each slice one
+// colour is fully on, one is off, and the third is fading in or out. For
+// example between 0 and 60 degrees: red full, blue off, green growing --
+// red turns into yellow by way of orange.
+void writeRgb() {
+  float h = rgbHue / 60.0f;           // 0..6
+  int   slice = (int)h % 6;
+  float f = h - (int)h;               // how far into the slice, 0..1
+  float r = 0, g = 0, b = 0;
+  switch (slice) {
+    case 0: r = 1;     g = f;     b = 0;     break;   // red       -> yellow
+    case 1: r = 1 - f; g = 1;     b = 0;     break;   // yellow    -> green
+    case 2: r = 0;     g = 1;     b = f;     break;   // green     -> turquoise
+    case 3: r = 0;     g = 1 - f; b = 1;     break;   // turquoise -> blue
+    case 4: r = f;     g = 0;     b = 1;     break;   // blue      -> purple
+    case 5: r = 1;     g = 0;     b = 1 - f; break;   // purple    -> red
+  }
+
+  // Brightness SQUARED: the eye is far more sensitive in dim light than in
+  // bright light. Dimmed linearly, almost everything happens at the bottom
+  // and almost nothing at the top; squared, every millimetre of stick feels
+  // the same.
+  float bright = (rgbBrightness / 100.0f) * (rgbBrightness / 100.0f);
+
+  int value[3] = {
+    (int)(r * bright * RGB_GAIN_RED   + 0.5f),
+    (int)(g * bright * RGB_GAIN_GREEN + 0.5f),
+    (int)(b * bright * RGB_GAIN_BLUE  + 0.5f),
+  };
+  const int pin[3] = { RGB_PIN_RED, RGB_PIN_GREEN, RGB_PIN_BLUE };
+
+  // Only touch a pin on a real change, same as with the lights.
+  static int before[3] = { -1, -1, -1 };
+  for (int i = 0; i < 3; i++) {
+    if (value[i] == before[i]) continue;
+    before[i] = value[i];
+    analogWrite(pin[i], RGB_COMMON_ANODE ? 255 - value[i] : value[i]);
+  }
+  digitalWrite(LED_BUILTIN, anyLightOn() ? HIGH : LOW);
+}
+
+// Called on every pass: let the stick "run into" colour and brightness.
+// We work with the time since last call, so the speed does not depend on
+// how often loop() comes round (with WiFi requests a pass sometimes takes
+// longer).
+void tendRgb() {
+  static unsigned long lastMs = 0;
+  unsigned long now = millis();
+  unsigned long dt = now - lastMs;
+  lastMs = now;
+  if (dt > 100) dt = 100;   // after a long pause, do not jump all at once
+  if (rgbStickX == 0 && rgbStickY == 0) return;
+
+  float sec = dt / 1000.0f;
+  rgbHue        += rgbStickX / 100.0f * 360.0f / RAINBOW_SECONDS    * sec;
+  rgbBrightness += rgbStickY / 100.0f * 100.0f / BRIGHTNESS_SECONDS * sec;
+
+  // The colour circle has no end: past 360 it carries on at 0 and back.
+  while (rgbHue >= 360) rgbHue -= 360;
+  while (rgbHue < 0)    rgbHue += 360;
+  rgbBrightness = constrain(rgbBrightness, 0.0f, 100.0f);
+
+  writeRgb();
 }
 
 // Switch one light. Only touch the pin on a real change: the command
@@ -333,11 +501,8 @@ const bool INVERT_RIGHT = true;   // and so is the right one
 // --- Gamepad through an ESP32 ---
 // Pin D0 carries the data line from an ESP32 (see firmware/esp32-gamepad/).
 // The ESP32 listens to a Bluetooth game controller and sends one line
-// about 50 times per second:
-//     L,R,red,blue,green,horn,gamepad\n     e.g. "80,-20,1,0,1,0,1"
-// The first two numbers are percent, -100..100 (minus = backwards), then
-// one 1 (on) or 0 (off) per light, the horn (1 while Y is held) and whether
-// a controller is connected at all.
+// about 50 times per second with EVERYTHING that is going on on the
+// controller (see "What comes from the controller" for the layout).
 //
 // ONE wire plus ground, nothing else. The car never answers the ESP32: D1
 // goes to the ATOM Echo instead (through a divider, see "Horn and sounds").
@@ -345,7 +510,7 @@ const bool INVERT_RIGHT = true;   // and so is the right one
 // GROUND MATTERS. Give the ESP32 its own ground wire straight to a GND pin
 // of the Arduino, NOT via the breadboard rail that carries the motor
 // current back to the battery. With a shared rail the line lost characters
-// every time the motors pulled hard (see isValidLine below).
+// every time the motors pulled hard (see "Checksum" below).
 //
 // This is a SECOND source of control next to the browser, not a
 // replacement: whoever sent the last command decides where the car goes.
@@ -356,7 +521,9 @@ const long GAMEPAD_BAUD = 38400;
 // single error. 38400 sits comfortably in between: the line is only 16 %
 // busy, and every single bit lasts three times longer than at 115200 -
 // margin against the electrical noise the motors make.
-char gamepadBuffer[24];
+// The longest line is "1,-512,-512,-512,-512,1023,1023,65535,15,255*FF"
+// = 47 characters. Plenty of room in case the ESP32 ever adds fields.
+char gamepadBuffer[64];
 uint8_t gamepadLen = 0;
 
 // --- Diagnostics: is anything arriving from the ESP32 at all? ---
@@ -369,11 +536,11 @@ uint8_t gamepadLen = 0;
 unsigned long gamepadChars  = 0;
 unsigned long gamepadLines  = 0;
 unsigned long gamepadLastMs = 0;
-char gamepadLastLine[24]    = "";
-// Lines that arrived mangled and were thrown away (see isValidLine).
+char gamepadLastLine[64]    = "";
+// Lines that arrived mangled and were thrown away (see parseLine).
 // If this climbs while steering, the motors are disturbing the D0 line.
 unsigned long gamepadBad    = 0;
-char gamepadLastBad[24]     = "";
+char gamepadLastBad[64]     = "";
 
 // --- Dead man's switch ---
 unsigned long lastCommandMs = 0;
@@ -491,6 +658,7 @@ void setup() {
     pinMode(lights[i].pin, OUTPUT);
     digitalWrite(lights[i].pin, LOW);
   }
+  writeRgb();                                   // RGB LED off (brightness 0)
 
   matrix.begin();
   showIcon(ICON_SEARCH);
@@ -652,6 +820,7 @@ void handleRequest(WiFiClient& client) {
   // Switch lights by hand, just open it in a browser:
   //   http://<car>/lights?red=1            only the red one
   //   http://<car>/lights?red=0&blue=1     red off, blue on
+  //   http://<car>/lights?bright=100&hue=240   RGB LED fully on, blue
   else if (line.indexOf("GET /lights")  >= 0) { lightsFromRequest(line); sendOk(client); }
   // Horn by hand:  http://<car>/horn       -> a short toot (dead man's switch 800 ms)
   //                http://<car>/horn?on=0  -> silent at once
@@ -665,7 +834,7 @@ void handleRequest(WiFiClient& client) {
   // multimeter readings.
   // IMPORTANT: unplug the ESP32 wire from D0 first, otherwise two things
   // transmit onto the same line.
-  else if (line.indexOf("GET /selftest") >= 0) { Serial1.println("0,0,0,0,0,0,0"); Serial1.flush(); sendOk(client); }
+  else if (line.indexOf("GET /selftest") >= 0) { sendSelfTest(); sendOk(client); }
   else                                        { sendPage(client); }  // "/" and anything else
 
   client.stop();
@@ -675,15 +844,33 @@ void handleRequest(WiFiClient& client) {
 // Only touch what was really sent: the arrow buttons of the phone page
 // should not switch a light off by accident.
 void lightsFromRequest(const String& line) {
+  int value;
   for (int i = 0; i < LIGHT_COUNT; i++) {
-    String name = String(lights[i].name) + "=";       // e.g. "red="
-    int pos = line.indexOf(name);
-    if (pos <= 0) continue;
-    // There has to be a ? or & in front, otherwise it is a chance match.
-    char before = line.charAt(pos - 1);
-    if (before != '?' && before != '&') continue;
-    setLight(i, line.substring(pos + name.length()).toInt() != 0);
+    if (requestNumber(line, lights[i].name, value)) setLight(i, value != 0);
   }
+
+  // RGB LED by hand:  /lights?bright=100&hue=240   (bright 0..100, hue 0..359)
+  bool rgbChanged = false;
+  if (requestNumber(line, "bright", value)) { rgbBrightness = constrain(value, 0, 100); rgbChanged = true; }
+  if (requestNumber(line, "hue", value))    { rgbHue = ((value % 360) + 360) % 360;    rgbChanged = true; }
+  if (rgbChanged) writeRgb();
+}
+
+// Is there "name=number" in the request? Then put the number into "value"
+// and return true. There has to be a ? or & in front of the name, otherwise
+// it is a chance match in the middle of some other word.
+bool requestNumber(const String& line, const char* name, int& value) {
+  String search = String(name) + "=";       // e.g. "red="
+  int pos = line.indexOf(search);
+  while (pos > 0) {
+    char before = line.charAt(pos - 1);
+    if (before == '?' || before == '&') {
+      value = line.substring(pos + search.length()).toInt();
+      return true;
+    }
+    pos = line.indexOf(search, pos + 1);
+  }
+  return false;
 }
 
 // Diagnostics for the browser: what actually arrived from the ESP32 on D0?
@@ -693,6 +880,8 @@ void lightsFromRequest(const String& line) {
 //   age_ms  = how long ago that was (below 100 with a live controller)
 //   bad     = lines thrown away because they arrived mangled
 //   last_bad = the last of those, as plain text
+// Below that, what the controller reports right now, unpacked - handy to
+// find out which number a button has: hold the button, reload the page.
 // Plenty of print() calls are fine here: you open this page by hand while
 // hunting a fault, so speed does not matter. While driving it would be
 // far too slow (see sendOk).
@@ -707,6 +896,16 @@ void sendStatus(WiFiClient& client) {
   client.print(F("age_ms=")); client.println(gamepadLines ? (millis() - gamepadLastMs) : 0);
   client.print(F("bad="));    client.println(gamepadBad);
   client.print(F("last_bad=")); client.println(gamepadLastBad);
+  client.print(F("connected=")); client.println(gp.connected ? 1 : 0);
+  client.print(F("left_x="));    client.print(gp.lx);
+  client.print(F(" left_y="));   client.println(gp.ly);
+  client.print(F("right_x="));   client.print(gp.rx);
+  client.print(F(" right_y="));  client.println(gp.ry);
+  client.print(F("buttons="));   client.print(gp.buttons);
+  client.print(F(" dpad="));     client.print(gp.dpad);
+  client.print(F(" misc="));     client.println(gp.misc);
+  client.print(F("rgb_hue="));    client.println((int)rgbHue);
+  client.print(F("rgb_bright=")); client.println((int)rgbBrightness);
 }
 
 // Pick a number out of the request, e.g. "?l=" from "GET /drive?l=-40&r=80"
@@ -828,103 +1027,262 @@ void readGamepad() {
   }
 }
 
-// Pick field n out of a line "a,b,c,d" (n = 0 is the first). Returns -1
-// when the field does not exist.
-int readField(const char* line, int n) {
-  for (int i = 0; i < n; i++) {
-    line = strchr(line, ',');
-    if (!line) return -1;
-    line++;
-  }
-  return atoi(line);
+// --- What comes from the controller (everything, unfiltered) ---
+// The ESP32 does no maths any more, it only reports. Its line:
+//    connected,lx,ly,rx,ry,throttle,brake,buttons,dpad,misc*CS
+// e.g. "1,0,-400,0,0,0,0,2,0,0*06" = connected, left stick pushed forward,
+// button B held. What the buttons and sticks DO on the car is ALL decided
+// here in the Arduino. A new idea therefore only means updating this sketch
+// over WiFi -- the ESP32 stays as it is. (Over-the-air updates are the
+// fussier side on the ESP32, see docs/troubleshooting.md.)
+//
+// Which button has which number? Open http://<car>/status, hold the
+// button, reload -- "buttons=" then shows its number.
+// (The Gamepad struct itself sits up top, next to the BUTTON_... values.)
+const int GAMEPAD_FIELDS = 10;   // at least this many numbers before the *
+
+Gamepad  gpRaw = {};          // the last valid line (for checking twice)
+uint16_t buttonsBefore = 0;   // for the edge: what was pressed last time?
+bool     gamepadDrives = false;   // did the stick move the car last time?
+
+// --- Sticks ---
+const int STICK_MAX = 512;   // Bluepad32 gives us -512 .. 512 per axis
+
+// DEAD ZONE: at rest the sticks do NOT sit exactly at 0 - we measured up
+// to 41 off. Without a dead zone the car would drive off on its own.
+// Anything below this counts as "stick released".
+const int DEADZONE = 80;
+
+// --- STRAIGHT-AHEAD HELP ---
+// The problem: the car only drove straight when the thumb pushed the
+// stick EXACTLY forward. One degree off and one side already ran slower.
+// A four-year-old cannot hit that. Neither can an adult, really.
+//
+// The fix is a wedge around the vertical: if the stick sits less than
+// STRAIGHT_DEGREES away from "fully forward", that counts as straight and
+// the steering is simply set to 0. Backwards works the same, because we
+// only ever compare magnitudes (abs()).
+//
+// Why an ANGLE and not just "throw away small steering values"? Because a
+// fixed number would be the same width at every speed - creeping along
+// slowly, you could not steer at all any more. The wedge grows with the
+// throttle: lots of throttle means a wide wedge in numbers, little
+// throttle a narrow one. Under the thumb it always feels the same.
+//
+// One number to tune. More slack = bigger (20, 25), sharper steering =
+// smaller (10). Above ~30 degrees steering gets sluggish.
+// Keep it in step with STRAIGHT_DEGREES in controller/gamepad/index.html,
+// so both ways of driving feel the same.
+const int   STRAIGHT_DEGREES = 15;
+// tan() turns the angle into a ratio of sides: at 15 degrees the sideways
+// deflection may be up to 27 % of the forward deflection and still count
+// as straight ahead.
+const float STRAIGHT_TAN = tanf(STRAIGHT_DEGREES * PI / 180.0f);
+
+// Turn a stick value (-512..512) into percent (-100..100), dead zone included.
+int stickToPercent(int value) {
+  if (abs(value) < DEADZONE) return 0;
+
+  // Subtract the dead zone FIRST, then scale up. Otherwise there would be
+  // a jump at the edge of the dead zone: the slightest movement would set
+  // off at 15 % instead of pulling away gently.
+  long amount  = (long)abs(value) - DEADZONE;
+  long percent = amount * 100 / (STICK_MAX - DEADZONE);
+  if (percent > 100) percent = 100;
+  return value > 0 ? (int)percent : -(int)percent;
 }
 
-// Does the line look like a real one?
+// Is the stick nearly straight ahead? Then drop the steering entirely.
+// Computed on the RAW stick values, before the conversion to percent -
+// that is the only place where the geometry holds and 15 degrees really
+// are 15 degrees.
+int helpGoStraight(int sideways, int forward) {
+  int slack = (int)(abs(forward) * STRAIGHT_TAN);
+  if (abs(sideways) <= slack) return 0;
+
+  // Do not just cut it off! That would put a jump right at the edge of
+  // the wedge: a hair too far and the steering leaps from 0 to 27 %.
+  // Instead subtract the slack and stretch what is left back to full
+  // width - the steering then grows smoothly out of zero, and full
+  // deflection still steers fully. Same trick as the dead zone.
+  long rest      = (long)abs(sideways) - slack;
+  long stretched = rest * STICK_MAX / (STICK_MAX - slack);
+  return sideways > 0 ? (int)stretched : -(int)stretched;
+}
+
+// SKID STEER: the car has no steering wheel. It turns by running one side
+// faster than the other, like a digger. So we turn "throttle" and
+// "steering" (both on the LEFT stick) into two side speeds in percent.
+void stickToDrive(int stickX, int stickY, int& l, int& r) {
+  // The minus on the throttle: the y axis counts like a screen, up is
+  // MINUS. Pushing the stick forward gives -400, but we want "forward".
+  int rawForward  = -stickY;
+  int rawSideways = helpGoStraight(stickX, rawForward);
+
+  int throttle = stickToPercent(rawForward);
+  int steering = stickToPercent(rawSideways);
+  l = throttle + steering;
+  r = throttle - steering;
+
+  // At full throttle AND full steering this would come to 200. Rather
+  // than simply clipping at 100 we scale both sides down by the same
+  // ratio - otherwise the car would suddenly steer less at full
+  // throttle than at half throttle.
+  int biggest = max(abs(l), abs(r));
+  if (biggest > 100) {
+    l = l * 100 / biggest;
+    r = r * 100 / biggest;
+  }
+}
+
+// --- CHECKSUM ---
 // While steering, the motors pull so much current that D0 now and then
-// loses a character or picks up garbage. "0,0,1,0,0,0,1" turns into
-// "0,01,0,0,0,1" - one comma gone, and the red light reads "01", i.e. ON.
-// That is exactly how LEDs lit up that nobody had switched on, and how the
-// horn twitched for 20 ms at a time (it sounded like croaking). We measured
-// 0 bad lines standing still and 33 in about 15 s of hard steering.
-// So every field is checked:
-//   fields 0 and 1 (speed):          a number from -100 to 100
-//   lights, horn, gamepad:           exactly one digit, 0 or 1
-//   anything after that (future):    digits only
-// When in doubt, throw it away - the next line is only 20 ms behind.
-// The real cure is a clean ground wire (see "Gamepad through an ESP32");
-// this check is the safety net.
-bool isValidLine(const char* line) {
-  const int LAST_SWITCH = 3 + LIGHT_COUNT;   // lights, horn, gamepad
-  int field = 0;
+// loses a character or picks up garbage - we measured 0 bad lines standing
+// still and 33 in about 15 s of hard steering. "0,0,1,0" turns into
+// "0,01,0": one comma gone, and the numbers land in the wrong field. That
+// is exactly how LEDs used to light up that nobody had switched on, and
+// how the horn croaked.
+// So the ESP32 adds a checksum, the same way GPS receivers do: every
+// character before the * is combined with XOR ("either-or"), written as
+// two hex digits. We work out the same thing here. If it does not match,
+// something broke on the way -- throw it away, the next line is only 20 ms
+// behind. The real cure is a clean ground wire (see "Gamepad through an
+// ESP32"); the checksum is the safety net.
+uint8_t checksum(const char* from, const char* to) {
+  uint8_t sum = 0;
+  for (const char* p = from; p < to; p++) sum ^= (uint8_t)*p;
+  return sum;
+}
+
+// Check one line and unpack it into "g". false = mangled.
+// The "struct" in front of Gamepad is on purpose: the Arduino tools
+// automatically copy every function header to the very top of the file,
+// where "Gamepad" is not known yet. With "struct" in front it reads there
+// as "this is coming later".
+bool parseLine(const char* line, struct Gamepad& g) {
+  // 1. Checksum: exactly two hex digits after the *, and they must match.
+  const char* star = strchr(line, '*');
+  if (!star || !isxdigit((unsigned char)star[1])
+            || !isxdigit((unsigned char)star[2]) || star[3] != 0) return false;
+  if (strtol(star + 1, nullptr, 16) != checksum(line, star)) return false;
+
+  // 2. Collect the numbers in front of it. MORE fields than expected are
+  //    fine -- that way a newer ESP32 may add something at the end later.
+  long f[GAMEPAD_FIELDS];
+  int  n = 0;
   const char* p = line;
   while (true) {
-    const char* start = p;
-    if (field < 2 && *p == '-') p++;
-    int digits = 0;
-    while (isdigit((unsigned char)*p)) { p++; digits++; }
-
-    if (field < 2) {
-      if (digits < 1 || digits > 3 || abs(atoi(start)) > 100) return false;
-    } else if (field <= LAST_SWITCH) {
-      if (digits != 1 || (*start != '0' && *start != '1')) return false;
-    } else {
-      if (digits < 1) return false;
-    }
-
-    field++;
-    if (*p == 0) break;          // end of line: done
-    if (*p != ',') return false; // some stray character
+    char* end;
+    long value = strtol(p, &end, 10);
+    if (end == p) return false;             // there was no number here
+    if (n < GAMEPAD_FIELDS) f[n] = value;
+    n++;
+    p = end;
+    if (p == star) break;
+    if (*p != ',') return false;            // some stray character
     p++;
   }
-  // ALL fields have to be there. When the START of a line is lost, the rest
-  // often looks valid: "-100,-100,0,0,0,1,1" becomes "0,0,0,1,1", which would
-  // mean "blue on, horn on". The price: an ESP32 with OLDER firmware (fewer
-  // fields) is no longer understood. More fields (newer firmware) still work.
-  return field >= 4 + LIGHT_COUNT;   // L, R, lights, horn, gamepad
+  if (n < GAMEPAD_FIELDS) return false;
+
+  // 3. Belt and braces: do the numbers fit what a controller can deliver
+  //    at all?
+  for (int i = 1; i <= 4; i++) if (f[i] < -STICK_MAX || f[i] > STICK_MAX) return false;
+  if (f[0] < 0 || f[0] > 1)                               return false;
+  if (f[5] < 0 || f[5] > 1023 || f[6] < 0 || f[6] > 1023) return false;
+  if (f[7] < 0 || f[7] > 0xFFFF)                          return false;
+  if (f[8] < 0 || f[8] > 15 || f[9] < 0 || f[9] > 255)    return false;
+
+  g.connected = f[0];
+  g.lx = f[1];  g.ly = f[2];  g.rx = f[3];  g.ry = f[4];
+  g.throttle = f[5]; g.brake = f[6];
+  g.buttons = f[7]; g.dpad = f[8]; g.misc = f[9];
+  return true;
 }
 
-// Only believe a switch once it arrives the SAME TWICE IN A ROW.
-// Even a line that passes the check above can be mangled - but two in a row
-// mangled in exactly the same way is next to impossible. Costs 20 ms of
-// delay, which nobody notices.
-// i = number of the switch (0 = first light ... horn ... gamepad).
-const int SWITCH_COUNT = LIGHT_COUNT + 2;
-int switchBefore[SWITCH_COUNT];   // starts at 0 = "off"
-
-bool switchConfirmed(int i, int value) {
-  bool same = (value == switchBefore[i]);
-  switchBefore[i] = value;
-  return same;
-}
-
-// Handle one line "L,R,red,blue,green,horn,gamepad".
 void handleGamepadLine(const char* line) {
-  if (!isValidLine(line)) {
+  Gamepad fresh;
+  if (!parseLine(line, fresh)) {
     gamepadBad++;
     strncpy(gamepadLastBad, line, sizeof(gamepadLastBad) - 1);
     gamepadLastBad[sizeof(gamepadLastBad) - 1] = 0;
     return;
   }
 
-  // From field 2 onwards come the lights, in the same order as the table.
+  // Sticks count at once. A wrong stick value would only be wrong for 20 ms.
+  gp.lx = fresh.lx;  gp.ly = fresh.ly;  gp.rx = fresh.rx;  gp.ry = fresh.ry;
+  gp.throttle = fresh.throttle; gp.brake = fresh.brake;
+
+  // Only believe the buttons once they arrive the SAME TWICE IN A ROW.
+  // The checksum catches almost everything -- but only almost: roughly one
+  // in 256 mangled lines happens to have the right sum anyway. For the
+  // sticks that does not matter, for a light switch it does (the light
+  // would stay on). Two lines in a row mangled in exactly the same way is
+  // next to impossible. Costs 20 ms, which nobody notices.
+  if (fresh.buttons == gpRaw.buttons && fresh.dpad == gpRaw.dpad &&
+      fresh.misc == gpRaw.misc && fresh.connected == gpRaw.connected) {
+    gp.buttons = fresh.buttons;  gp.dpad = fresh.dpad;
+    gp.misc    = fresh.misc;     gp.connected = fresh.connected;
+  }
+  gpRaw = fresh;
+
+  applyGamepad();
+}
+
+// This is where it says what the buttons do on the car. New ideas go HERE.
+void applyGamepad() {
+  // Whether a controller is there at all -- we pass that on to the ATOM,
+  // which plays the starter sound when one connects.
+  gamepadConnected = gp.connected;
+
+  // EDGES: "just pressed" and "just released". Without them a light switch
+  // would toggle 50 times a second for as long as a finger rests on the
+  // button.
+  uint16_t pressed  = gp.buttons & ~buttonsBefore;
+  uint16_t released = buttonsBefore & ~gp.buttons;
+  buttonsBefore = gp.buttons;
+
+  // Lights: like a light switch -- press once = on, press again = off.
   for (int i = 0; i < LIGHT_COUNT; i++) {
-    int value = readField(line, 2 + i);
-    if (switchConfirmed(i, value)) setLight(i, value != 0);
+    if (pressed & lights[i].button) setLight(i, !lights[i].on);
   }
 
-  // After the lights comes the horn.
-  int horn = readField(line, 2 + LIGHT_COUNT);
-  if (switchConfirmed(LIGHT_COUNT, horn)) setHorn(horn != 0);
+  // Horn: honks while the button is held. Every "on" extends its dead
+  // man's switch. It is only switched off on RELEASE -- that way you can
+  // still test it from the browser (/horn) without the controller choking
+  // it straight away.
+  if (gp.buttons & BUTTON_HORN)  setHorn(true);
+  if (released & BUTTON_HORN)    setHorn(false);
 
-  // And after that, whether a controller is connected at all. The car does
-  // not need this itself, but passes it on to the ATOM: it plays the
-  // starter sound when a controller connects.
-  int gamepad = readField(line, 3 + LIGHT_COUNT);
-  if (switchConfirmed(LIGHT_COUNT + 1, gamepad)) gamepadConnected = (gamepad != 0);
+  // RGB LED: the right stick (minus on y: up is MINUS in Bluepad32).
+  rgbStickX = stickToPercent( gp.rx);
+  rgbStickY = stickToPercent(-gp.ry);
 
-  // Exactly the same path as the browser takes: percent in, motor
-  // protection here in the sketch. "0,0" is caught by driveCommand itself.
-  driveCommandPercent(readField(line, 0), readField(line, 1));
+  // Driving: the left stick. Exactly the same path as the browser takes -
+  // percent in, motor protection (SPEED_MAX) here in the sketch.
+  // When the stick is back in the middle we send "stop" ONCE and then
+  // nothing. The old ESP32 sent "0,0" 50 times a second -- so the
+  // controller kept choking the browser controls, even with nobody
+  // touching it.
+  int l, r;
+  stickToDrive(gp.lx, gp.ly, l, r);
+  if (l != 0 || r != 0) {
+    driveCommandPercent(l, r);
+    gamepadDrives = true;
+  } else if (gamepadDrives) {
+    driveCommandPercent(0, 0);
+    gamepadDrives = false;
+  }
+}
+
+// For /selftest: send a valid "nothing pressed" line out on D1, with its
+// checksum -- exactly the way the ESP32 would send it.
+void sendSelfTest() {
+  const char* content = "0,0,0,0,0,0,0,0,0,0";
+  char line[40];
+  snprintf(line, sizeof(line), "%s*%02X", content,
+           checksum(content, content + strlen(content)));
+  Serial1.println(line);
+  Serial1.flush();
 }
 
 // These two belong together: listen to the gamepad AND make sure the car
@@ -934,8 +1292,14 @@ void gamepadAndDeadMan() {
   readGamepad();
   if (moving && (millis() - lastCommandMs > TIMEOUT_MS)) halt();
   if (hornOn && (millis() - hornLastMs > HORN_TIMEOUT_MS)) setHorn(false);
-  // Nothing from the ESP32 any more means no controller either.
-  if (millis() - gamepadLastMs > TIMEOUT_MS) gamepadConnected = false;
+  // Nothing from the ESP32 any more means no controller either -- and the
+  // RGB LED should not keep turning forever on the last stick value.
+  if (millis() - gamepadLastMs > TIMEOUT_MS) {
+    gamepadConnected = false;
+    rgbStickX = 0;
+    rgbStickY = 0;
+  }
+  tendRgb();
   sendSound();
 }
 

@@ -156,13 +156,39 @@ Two endpoints on the car answer this without any guessing:
 - **`http://<car>/status`** — what arrived on `D0`. `chars` counts every single byte.
   If it stays at **0**, nothing is arriving *physically* (cable, pin or ground). If it
   counts up, the link is fine and the fault is elsewhere. `last` shows the last line
-  received, which also tells you **which build** of the ESP32 firmware is running:
-  seven fields (`L,R,red,blue,green,horn,gamepad`) is current, anything shorter is an
-  old build. `bad` counts lines that arrived mangled and were thrown away — see below.
+  received, which also tells you **which generation** of the ESP32 firmware is
+  running: if it contains a `*`, it is the current raw-data one; without a `*` it is an
+  old build that still did the mixing itself. `bad` counts lines that arrived mangled
+  and were thrown away — see below. Below that, the line comes decoded:
+  `connected=`, `left_x=`/`left_y=`, `right_x=`/`right_y=`, `buttons=`, `dpad=`,
+  `misc=`, and the RGB LED's `rgb_hue=`/`rgb_bright=`. **Hold a button and reload** to
+  find out which number it has.
 - **`http://<car>/selftest`** — sends one line out on `D1`. Put a jumper from `D1` to
   `D0` (unplug the ESP32 wire first!) and the same line has to come back in, with the
   counters jumping. That tests `D0`, `Serial1` and the software *without* the ESP32,
   so afterwards you know for certain which side the fault is on.
+
+What the line from the ESP32 means, field by field:
+
+```
+connected,lx,ly,rx,ry,throttle,brake,buttons,dpad,misc*CS
+```
+
+| Field | Values |
+|-------|--------|
+| `connected` | 1 while a controller is paired and connected |
+| `lx`, `ly`, `rx`, `ry` | the two sticks, raw, −512…512. **y negative = forward** (up) |
+| `throttle`, `brake` | analog triggers, 0…1023 — always 0 on a pad in Switch mode, where ZL/ZR are digital |
+| `buttons` | one bit each: A=1, B=2, X=4, Y=8, LB=16, RB=32, LT=64, RT=128, left stick click=256, right stick click=512 |
+| `dpad` | up=1, down=2, right=4, left=8 |
+| `misc` | HOME=1, minus=2, plus=4, capture=8 |
+| `*CS` | checksum: every character before the `*` XORed together, as two hex digits (the same trick GPS receivers use) |
+
+> ⚠️ **Switching from an old ESP32 build to the raw-data one: ESP32 first, then the
+> Arduino.** The two generations do not understand each other, so in between the
+> controller does nothing — that is expected, not a new fault. Flash the ESP32 over
+> USB (`-Usb` / `USB=...`) so the `otadata` trap below cannot bite, check for the `*`
+> in `last=`, then update the Arduino over WiFi.
 
 > ⚠️ **Resistance measurements on microcontroller pins are worthless.** Ours read
 > 700 Ω, then 1.3 MΩ, then 500 kΩ on the same pin — protection diodes, residual charge
@@ -180,7 +206,7 @@ comes out as a croak.
 **Cause:** the line from the ESP32 to the Arduino (`D0`) loses characters whenever
 the motors pull a lot of current. We counted: **0** mangled lines in three minutes
 standing still, **33** in about 15 seconds of hard steering. What arrived looked like
-this:
+this (still the old line format, speeds first):
 
 ```
 -100100,0,0,0,0,1        a comma swallowed
@@ -203,11 +229,15 @@ errors: twist each data wire together with its ground wire, and put an electroly
 capacitor across `VM`/`GND` at the motor driver (see "The Arduino resets when the
 motors start" above).
 
-**The safety net in software:** the Arduino checks every line field by field — speeds
-between −100 and 100, lights, horn and controller exactly `0` or `1`, and **all seven
-fields present** — and throws away anything else. Switches only count once they
-arrive the same **twice in a row**. `http://<car>/status` shows how many lines were
-thrown away (`bad`) and the last one (`last_bad`); watch it while you steer.
+**The safety net in software:** every line ends in a **checksum** (`*CS`, see above).
+The Arduino recalculates it and throws away any line where it does not match, or
+where a field is out of range. A lost comma or a lost start of line no longer gets
+through looking valid. An 8-bit checksum still lets roughly one in 256 mangled lines
+slip past by chance, so **buttons only count once they arrive the same twice in a
+row** — two lines mangled in exactly the same way is as good as impossible, and 20 ms
+of delay on a button nobody notices. Stick values are taken straight away: a wrong one
+is only wrong for 20 ms. `http://<car>/status` shows how many lines were thrown away
+(`bad`) and the last one (`last_bad`); watch it while you steer.
 
 ## The upload says it worked, but the old firmware keeps running
 
@@ -221,7 +251,8 @@ other one and the bootloader ignores it. **A flash over the USB cable erases `ot
 and repairs it** (`-Usb` / `USB=...`).
 
 This is exactly why the sketch prints a `VERSION` string at startup, and why `/status`
-is worth reading: the version line is the only honest proof that an update arrived.
+is worth reading: the version line — or a changed line format, like the `*` in
+`last=` — is the only honest proof that an update arrived.
 "Done" from the upload script is not. **If an update changes nothing, check the
 version first.**
 

@@ -1,7 +1,7 @@
 # Next steps
 
-The car drives, lights up, takes a game controller — and since the sound stage it
-also honks, cranks its starter when the controller connects and beeps when it backs
+The car drives, lights up (three LEDs on buttons, an RGB LED on the right stick),
+takes a game controller — and since the sound stage it also honks, cranks its starter when the controller connects and beeps when it backs
 up. That part is built and written up in **[sound.md](sound.md)**.
 
 What follows is planned, not built. Treat the code in here as a design sketch.
@@ -10,12 +10,23 @@ fit the hardware remarkably well.
 
 ## Pins still free
 
-In use: `D2`, `D4`, `D7`, `D8`, `D9`, `D10` (motors), `D3`, `D5`, `D6` (lights), `D0`
-(from the ESP32 gamepad bridge), `D1` (to the ATOM Echo). `D13` is the on-board LED,
-and the 12×8 LED matrix is internal (no pins).
+In use: `D2`, `D4`, `D7`, `D8`, `D9`, `D10` (motors), `D3`, `D5`, `D6` (lights),
+`D11`, `D12`, `A4` (RGB LED), `D0` (from the ESP32 gamepad bridge), `D1` (to the ATOM
+Echo). `D13` is the on-board LED, and the 12×8 LED matrix is internal (no pins).
 
-Free: `D11`, `D12`, `A0`–`A5` (analog pins work as plain digital pins). `D11` is the
-only PWM pin still available.
+Free: `A0`–`A3` and `A5` (analog pins work as plain digital pins too). `A1` is
+earmarked for battery monitoring (step 4). **No PWM-capable pin is left** — anything
+that has to dim or set a speed needs one freed first, e.g. by moving an on/off light
+to an analog pin. `A4`/`A5` double as the I²C pins on the header, so an I²C sensor
+goes on the Qwiic socket instead, which is a separate bus.
+
+## New buttons cost one sketch
+
+The ESP32 bridge only passes on the raw controller state; what each button *does* is
+decided in the Arduino sketch, in `applyGamepad()`. So a new idea on the controller is
+a change to one sketch, uploaded over WiFi — the ESP32 stays as it is. Hold the button,
+reload `http://<car>/status`, and `buttons=` (or `dpad=`, `misc=`) shows its number.
+Still unused: the shoulder buttons, both stick clicks, the D-pad and minus/plus.
 
 ---
 
@@ -157,6 +168,7 @@ under load" problem, written down.
 monitor. The matrix icon and the cut-off come later, once the numbers are trusted.
 
 *Without any code:* a two-wire **mini digital voltmeter** (~€2) glued to the rail and
-always readable. Or an **INA219/INA226** (I²C, ~€4), which measures voltage **and**
-current, works as a real fuel gauge (counting mAh), and would incidentally answer the
-open question of how many amps the motors actually pull while turning.
+always readable. Or an **INA219/INA226** (I²C, ~€4, on the Qwiic socket), which
+measures voltage **and** current, works as a real fuel gauge (counting mAh), and would
+incidentally answer the open question of how many amps the motors actually pull while
+turning.

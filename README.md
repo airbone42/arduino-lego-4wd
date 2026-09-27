@@ -28,6 +28,8 @@ of it is meant to be understood, not just copied.
 - **Proportional throttle and steering,** mixed into tank steering, with a 15° wedge
   around straight ahead so a four-year-old can actually drive it in a straight line.
 - **Three LEDs on the controller buttons,** switched like light switches.
+- **An RGB LED on the right stick** — push up for brighter, down for dimmer, left or
+  right to roll through the rainbow. Any colour, while the left stick keeps driving.
 - **It makes noise.** A horn on the controller, a starter motor that cranks when the
   controller connects, and a reversing beeper — all played by a tiny M5Stack ATOM
   Echo cube, every wave calculated on the fly. See [docs/sound.md](docs/sound.md).
@@ -59,10 +61,10 @@ of it is meant to be understood, not just copied.
 
 ![Wiring diagram](images/wiring-diagram.svg)
 
-The diagram is in three stages: **① is the whole car** and is all you need to drive.
-The two dashed panels below the line — **② lights** and **③ the gamepad bridge** —
-are optional and can be added later, one at a time. Nothing in them changes anything
-in ①. The sound cube is not in the diagram yet; its four wires are in
+The diagram is in stages: **① is the whole car** and is all you need to drive.
+The dashed panels below the line — **② lights**, **③ the gamepad bridge** and
+**④ the RGB LED** — are optional and can be added later, one at a time. Nothing in
+them changes anything in ①. The sound cube is not in the diagram yet; its four wires are in
 [docs/sound.md](docs/sound.md).
 
 The Arduino never drives a motor directly — it only sends signals to the TB6612
@@ -140,8 +142,9 @@ Both pages talk to the same endpoints:
 | `GET /drive?l=-100..100&r=-100..100` | proportional, per side, in percent |
 | `GET /stop` | stop now |
 | `GET /lights?red=1&blue=0&green=1` | switch lights (they also ride along on `/drive`) |
+| `GET /lights?bright=100&hue=120` | set the RGB LED — brightness 0–100, hue in degrees (0 red, 120 green, 240 blue) |
 | `GET /horn` | a short toot (`/horn?on=0` stops it) — needs the ATOM Echo |
-| `GET /status` | what is arriving from the ESP32 — see troubleshooting |
+| `GET /status` | what is arriving from the ESP32, decoded — see troubleshooting |
 | `GET /selftest` | send a test line out on `D1`, for a `D1`→`D0` loopback check |
 | `GET /` | the phone page |
 
@@ -151,12 +154,32 @@ lives in the sketch and cannot be overridden from outside.
 ### Or: the controller straight on the car
 
 The browser page needs a laptop following the car around. Putting an **ESP32** on the
-car removes it: it pairs with the controller over Bluetooth, does the same mixing, and
-sends the result to the Arduino as one short line over a single wire —
-`L,R,red,blue,green,horn,gamepad`, 50 times a second.
+car removes it: it pairs with the controller over Bluetooth and passes on what the
+controller is doing — raw, both sticks and every button — as one short line over a
+single wire, 50 times a second:
+
+```
+connected,lx,ly,rx,ry,throttle,brake,buttons,dpad,misc*CS
+```
+
+**The ESP32 decides nothing.** Dead zone, the straight-ahead wedge, tank mixing, which
+button switches which light, the horn, the RGB LED — all of that lives in the Arduino
+sketch (`applyGamepad()`). That was not the first version: the ESP32 used to do the
+mixing and send finished speeds, so every new idea meant updating *both* boards — and
+over-the-air updates to the ESP32 are the unreliable side (see troubleshooting). Now a
+new button is one change to the Arduino sketch over WiFi, and the ESP32 never has to be
+touched again.
+
+`*CS` is a checksum, like on a GPS receiver: all characters before the `*` XORed
+together, as two hex digits. The line picks up errors while the motors pull hard; a
+line whose sum does not match is thrown away, and buttons only count once they arrive
+the same twice in a row. The fields are listed in
+[docs/troubleshooting.md](docs/troubleshooting.md#is-anything-reaching-the-arduino-at-all).
 
 It is a second source of control, not a replacement: whoever sent the last command
-decides where the car goes, and the dead man's switch covers both. See
+decides where the car goes, and the dead man's switch covers both. A stick at rest
+sends one "stop" and then stays quiet, so a controller lying on the sofa does not
+fight the phone page. See
 [firmware/esp32-gamepad/](firmware/esp32-gamepad/) for the sketch and
 [docs/wiring.md](docs/wiring.md) for the two wires and the separate 5 V supply it
 needs. Give its ground a wire of its own, straight to the Arduino — sharing the rail

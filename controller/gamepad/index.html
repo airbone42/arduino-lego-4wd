@@ -71,8 +71,8 @@ const DEADZONE  = 0.15;   // stick slop around the centre that we ignore
 // STRAIGHT-AHEAD HELP: if the stick sits less than this many degrees away
 // from "fully forward" (or "fully back"), that counts as straight and the
 // steering is dropped. Without it you would have to hit the vertical to
-// the degree. Keep this in step with STRAIGHT_DEGREES in the ESP32 sketch
-// so both ways of driving feel the same.
+// the degree. Keep this in step with STRAIGHT_DEGREES in the Arduino
+// sketch (firmware/lego4wd) so both ways of driving feel the same.
 const STRAIGHT_DEGREES = 15;
 const STRAIGHT_TAN     = Math.tan(STRAIGHT_DEGREES * Math.PI / 180);
 const SEND_MS   = 150;    // minimum gap between two commands

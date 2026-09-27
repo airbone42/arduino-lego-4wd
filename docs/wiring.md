@@ -4,8 +4,8 @@
 
 ## The idea in one paragraph
 
-The Arduino is not strong enough to drive a motor from a pin — an output pin can
-supply about 20 mA, a TT motor wants a few hundred. So the Arduino only sends
+The Arduino is not strong enough to drive a motor from a pin — an output pin of the
+UNO R4 may supply 8 mA, a TT motor wants a few hundred. So the Arduino only sends
 *signals* to the TB6612 motor driver, and the driver switches the *battery* current
 through to the motors. Two motors per channel, wired in parallel: the two left
 wheels always do the same thing, and so do the two right ones. That is why the car
@@ -128,6 +128,77 @@ let twice as many people through. 500 Ω is safe for *both* kinds of green; a si
 Test it with nothing plugged in at all: the little **"L"** LED already on the board
 joins in whenever any light is on, so you can check the button before wiring anything.
 By hand, in a browser: `http://<car>/lights?red=1&blue=1&green=1`.
+
+### RGB LED (optional)
+
+An RGB LED is really **three LEDs in one case** — red, green and blue — sharing one
+leg, the **longest** one. The eye mixes the rest: red + green = yellow, green + blue =
+cyan, all three = white. It sits on the **right stick**, so the left one keeps driving:
+
+| Right stick | Effect |
+|-------------|--------|
+| up | brighter |
+| down | dimmer — all the way down = **off** |
+| left / right | roll through the rainbow, one way or the other |
+
+The further you push, the faster it goes. Let go and it stays as it is. After power-up
+it is off — push the stick up once.
+
+| Leg | Pin | Resistor |
+|-----|-----|----------|
+| red | `D11` | ~500 Ω (two 1 kΩ in parallel) |
+| green | `D12` | 330 Ω |
+| blue | `A4` | 330 Ω |
+| **longest** (common cathode) | `GND` | — |
+
+```
+   Arduino                              RGB LED (4 legs)
+   D11  ──[ 2× 1 kΩ side by side = 500 Ω ]── red leg
+   D12  ──[ 330 Ω ]───────────────────── green leg
+   A4   ──[ 330 Ω ]───────────────────── blue leg
+   GND  ──────────────────────────────── LONGEST leg (common cathode)
+```
+
+**Why these pins?** This LED has to **dim**, not just switch, and only a PWM pin can
+do that: it switches on and off ~500 times a second and the eye only sees the average.
+`D11`, `D12` and `A4` were the last free PWM-capable pins. (`D13` is free too, but it
+drives the on-board "L" LED.) `D11` and `D12` share one hardware timer; the board core
+handles that, and on ours red and green dim independently.
+
+**Why 500 Ω on red?** Red eats only ~2 V, green and blue ~3 V. With 330 Ω, red would
+leave too much for the resistor: ~9 mA, over the 8 mA a pin may give. We started with
+a single 1 kΩ (~3 mA), but next to green and blue red was far too weak and the rainbow
+came out mostly green. Two 1 kΩ side by side make ~500 Ω and ~6 mA: twice as bright
+and still safe. Green and blue get ~5–6 mA through their 330 Ω.
+
+**Measure it first** — multimeter on the diode test (the ▶| symbol):
+
+1. **Black probe on the longest leg, red on each of the other three.** If a colour
+   glows faintly each time, it is a **common cathode** and the longest leg goes to
+   `GND` — the usual case. You also find out which leg is which colour.
+2. If it only glows the other way round (red probe on the longest leg), it is a
+   **common anode**. The longest leg then goes to the Arduino's **5V pin** — ⚠️ **not**
+   the plus rail, which carries 9.6 V — and in the sketch set
+   `RGB_COMMON_ANODE = true`. (Wrong setting? The LED glows bright white when it
+   should be off.)
+3. **The display often just shows "1".** That does not mean broken, it means **over
+   range**: many cheap meters only show up to about 2 V on the diode test. Blue and
+   bright green need more, so they glow while the display gives up. That also tells
+   you which of the two kinds of green you have (see the table above):
+   - green shows "1" like blue → bright kind → **330 Ω** is right;
+   - green shows a number like red (~1.6–1.9 V) → pale kind → use **1 kΩ** for green
+     too, since 330 Ω would be ~9 mA.
+
+**Fine-tuning in the sketch:** `RGB_GAIN_RED` / `RGB_GAIN_GREEN` / `RGB_GAIN_BLUE`
+(0–255) — if yellow looks greenish, turn green down until yellow is yellow; children
+judge that better by eye than any formula. `RAINBOW_SECONDS` (4) is one full turn at
+full deflection, `BRIGHTNESS_SECONDS` (2) from off to full. Brightness is **squared**
+on the way out, because the eye is far more sensitive in the dark — that way every
+millimetre of stick feels the same.
+
+Test it without a controller: `http://<car>/lights?bright=100&hue=120` (brightness
+0–100, hue in degrees: 0 red, 60 yellow, 120 green, 180 cyan, 240 blue, 300 magenta).
+`http://<car>/status` shows the current state as `rgb_hue` and `rgb_bright`.
 
 ### ESP32 gamepad bridge (optional)
 
